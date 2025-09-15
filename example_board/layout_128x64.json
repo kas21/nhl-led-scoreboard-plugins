@@ -1,0 +1,28 @@
+{
+    "_default": {
+        "position": [0, 0],
+        "align": "left-top"
+    },
+    "example": {
+        "message": {
+            "position": ["50%", 16],
+            "align": "center-top",
+            "font": "small"
+        },
+        "time": {
+            "position": ["50%", 28],
+            "align": "center-top",
+            "font": "default_medium"
+        },
+        "date": {
+            "position": ["50%", 40],
+            "align": "center-top",
+            "font": "small"
+        },
+        "plugin_info": {
+            "position": ["50%", 52],
+            "align": "center-top",
+            "font": "small"
+        }
+    }
+}
