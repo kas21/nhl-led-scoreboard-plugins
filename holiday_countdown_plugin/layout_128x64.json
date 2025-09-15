@@ -1,0 +1,27 @@
+{
+  "holiday_countdown": {
+    "count_text": {
+      "position":[1, 1],
+      "align": "left",
+      "font": "large"
+    },
+    "until_text": {
+      "position":[1, 33],
+      "align": "left",
+      "font": "_default"
+    },
+    "holiday_name_text": {
+      "position":[1, 50],
+      "align": "left",
+      "font": "_default"
+    },
+    "holiday_image": {
+      "position":[66, 0],
+      "align": "left"
+    },
+    "gradiant": {
+      "position":[-10, 0],
+      "align": "left"
+    }
+  }
+}
