@@ -1,0 +1,15 @@
+{
+    "country_code": "US",
+    "subdiv": "NY",
+    "catgegories": "",
+    "ignored_holidays": [
+        "Columbus Day",
+        "Veterans Day",
+        "Election Day"
+    ],
+    "horizon_days": 120,
+    "themes_path": "holiday_themes.json",
+    "custom_holidays_path": "custom_holidays.csv",
+    "display_seconds": 5,
+    "enabled": true
+}

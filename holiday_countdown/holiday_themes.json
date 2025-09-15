@@ -2,41 +2,41 @@
   "default": {
     "fg": "#FFFFFF",
     "bg": "#000000",
-    "image": "assets/holidays/default.png"
+    "image": "assets/images/default.png"
   },
   "Valentine's Day": {
     "fg": "#FFB7C5",
     "bg": "#A80030",
-    "image": "assets/holidays/valentines.png"
+    "image": "assets/images/valentines.png"
   },
   "Saint Patrick's Day": {
     "fg": "#FFFFFF",
     "bg": "#006400",
-    "image": "assets/holidays/st_patrick.png"
+    "image": "assets/images/st_patrick.png"
   },
   "Halloween": {
     "fg": "#FFA500",
     "bg": "#000000",
-    "image": "assets/holidays/halloween.png"
+    "image": "assets/images/halloween.png"
   },
   "Thanksgiving Day": {
     "fg": "#963626",
     "bg": "#C86820",
-    "image": "assets/holidays/thanksgiving.png"
+    "image": "assets/images/thanksgiving.png"
   },
   "Christmas Day": {
-    "fg": "#FFFFFF",
+    "fg": "#FF0000",
     "bg": "#006400",
-    "image": "assets/holidays/christmas.png"
+    "image": "assets/images/christmas.png"
   },
     "New Year's Day": {
     "fg": "#CE9236",
     "bg": "#000000",
-    "image": "assets/holidays/new_years.png"
+    "image": "assets/images/new_years.png"
   },
   "Ovi's Birthday": {
     "fg": "#000000",
     "bg": "#FFD166",
-    "image": "assets/holidays/birthday_ethan.png"
+    "image": "assets/images/birthday_ethan.png"
   }
 }

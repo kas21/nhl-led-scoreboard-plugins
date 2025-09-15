@@ -1,4 +1,8 @@
 {
+  "_default": {
+    "position": [0,0],
+    "align": "left"
+  },
   "holiday_countdown": {
     "count_text": {
       "position":[1, 1],

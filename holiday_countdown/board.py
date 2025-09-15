@@ -6,6 +6,7 @@ from . import __version__, __description__, __board_name__
 import datetime
 from data.data import Data
 from renderer.matrix import Matrix
+import debug
 
 import csv
 import json
@@ -119,18 +120,17 @@ class HolidayCountdownBoard(BoardBase):
         self.subdiv = self.board_config.get("subdiv", "NY")
         self.categories = self.board_config.get("catgegories", "")
         self.ignored_holidays = self.board_config.get("ignored_holidays", "")
-        self.horizon_days = self.board_config.get("horizon_days", "90")
-        self.themes_path = self.board_config.get("themes_path", "./holiday_themes.csv")
-        self.custom_holidays_path = self.board_config.get("custom_holidays_path", "./custom_holidays.csv")
+        self.horizon_days = self.board_config.get("horizon_days", 90)
+
+        # Resolve paths relative to the plugin directory
+        self.board_dir = self._get_board_directory()
+        self.themes_path = self._resolve_path(self.board_config.get("themes_path", "holiday_themes.json"))
+        self.custom_holidays_path = self._resolve_path(self.board_config.get("custom_holidays_path", "custom_holidays.csv"))
         
         # Access standard application config
         self.font = data.config.layout.font
         self.font_large = data.config.layout.font_large
         self.team_colors = self.data.config.team_colors
-
-        # Get plugin layout
-        self.layout = self.data.config.config.layout.get_board_layout("holiday_countdown")
-        
 
         # Set some additional class properties
         self.rows = self.matrix.height
@@ -138,9 +138,9 @@ class HolidayCountdownBoard(BoardBase):
 
         self.today = date.today()
 
-        # Paths from config (add these to your config)
-        self.themes_path = getattr(self.data.config, "holiday_countdown_themes_path", "")
-        self.custom_holidays_path = getattr(self.data.config, "holiday_countdown_custom_csv", "")
+        # # Paths from config
+        # self.themes_path = getattr(self.data.config, "holiday_countdown_themes_path", "")
+        # self.custom_holidays_path = getattr(self.data.config, "holiday_countdown_custom_csv", "")
 
         # Load user data
         self.themes = load_themes(self.themes_path)
@@ -151,14 +151,27 @@ class HolidayCountdownBoard(BoardBase):
 
         # Image cache
         self._image_cache: dict[str, Image.Image] = {}
-    
-   
+
+    def _get_board_directory(self):
+        """Get the absolute path to this board's directory."""
+        import inspect
+        board_file = inspect.getfile(self.__class__)
+        return os.path.dirname(os.path.abspath(board_file))
+
+    def _resolve_path(self, path):
+        """Resolve a path relative to the board directory."""
+        if os.path.isabs(path):
+            return path
+        return os.path.join(self.board_dir, path)
+
     # -------- Rendering --------
 
     def render(self):
         self.matrix.clear()
 
-        black_gradiant = self._open_image(f'assets/images/{self.cols}x{self.rows}_scoreboard_center_gradient.png')
+        layout = self.get_board_layout("holiday_countdown")
+
+        black_gradiant = Image.open(f'assets/images/{self.cols}x{self.rows}_scoreboard_center_gradient.png')
 
         for dt, name in self.upcoming_holidays:
             if name in self.ignored_holidays:
@@ -182,26 +195,26 @@ class HolidayCountdownBoard(BoardBase):
                     new_size = (32, 32)
                     img = img.resize(new_size)
                 self.matrix.draw_image_layout(
-                    self.layout.holiday_image, 
+                    layout.holiday_image, 
                     img, 
                 )
                 
             # Gradiant
-            self.matrix.draw_image_layout(self.layout.gradiant, black_gradiant)
+            self.matrix.draw_image_layout(layout.gradiant, black_gradiant)
 
             # Text 
             fg_rgb = _hex_to_rgb(theme.fg)
-            self.matrix.draw_text_layout(self.layout.count_text, str(days_til), fillColor=fg_rgb)
+            self.matrix.draw_text_layout(layout.count_text, str(days_til), fillColor=fg_rgb)
             
             self.matrix.render()
             self.sleepEvent.wait(1)
            
-            self.matrix.draw_text_layout(self.layout.until_text, "DAYS TIL", fillColor=fg_rgb)
+            self.matrix.draw_text_layout(layout.until_text, "DAYS TIL", fillColor=fg_rgb)
             
             self.matrix.render()
             self.sleepEvent.wait(1)
             
-            self.matrix.draw_text_layout(self.layout.holiday_name_text, name.upper(), fillColor=fg_rgb)
+            self.matrix.draw_text_layout(layout.holiday_name_text, name.upper(), fillColor=fg_rgb)
 
             self.matrix.render()
             self.sleepEvent.wait(7)
@@ -299,8 +312,11 @@ class HolidayCountdownBoard(BoardBase):
         if path in self._image_cache:
             return self._image_cache[path]
         try:
-            img = Image.open(path).convert("RGBA")
+            # Resolve path relative to board directory
+            resolved_path = self._resolve_path(path)
+            img = Image.open(resolved_path).convert("RGBA")
             self._image_cache[path] = img
             return img
-        except Exception:
+        except Exception as e:
+            debug.error(f"Failed to load image {path}: {e}")
             return None
