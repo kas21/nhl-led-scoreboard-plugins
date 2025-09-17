@@ -1,0 +1,47 @@
+{
+    "_default": {
+        "position": [0, 0],
+        "align": "left-top"
+    },
+    "nfl_board": {
+        "team_logo": {
+            "position": [0, 0],
+            "align": "left-top"
+        },
+        "team_name": {
+            "position": [18, 0],
+            "align": "left-top",
+            "font": "small"
+        },
+        "record": {
+            "position": [18, 10],
+            "align": "left-top",
+            "font": "small"
+        },
+        "record_comment": {
+            "position": [0, 16],
+            "align": "left-top",
+            "font": "wx_medium"
+        },
+        "primary_label": {
+            "position": [0, 22],
+            "align": "left-top",
+            "font": "wx_medium"
+        },
+        "primary_line1": {
+            "position": [0, 28],
+            "align": "left-top",
+            "font": "small"
+        },
+        "secondary_label": {
+            "position": [34, 22],
+            "align": "left-top",
+            "font": "wx_medium"
+        },
+        "secondary_line1": {
+            "position": [34, 28],
+            "align": "left-top",
+            "font": "small"
+        }
+    }
+}

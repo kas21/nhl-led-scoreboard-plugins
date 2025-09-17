@@ -1,0 +1,110 @@
+{
+    "_default": {
+        "position": [0, 0],
+        "align": "left-top"
+    },
+    "nfl_board": {
+        "team_logo": {
+            "position": ["48%", 15],
+            "align": "left-top"
+        },
+        "team_name": {
+            "position": [1, 1],
+            "align": "left-top",
+            "font": "small"
+        },
+        "record_header": {
+            "position": [0, 9],
+            "relative": {
+                "to": "team_name",
+                "align": "left"
+            }, 
+            "align": "left-top",
+            "font": "small"
+        },
+        "record": {
+            "position": [0, 7],
+            "relative": {
+                "to": "record_header",
+                "align": "left"
+            }, 
+            "align": "left-top",
+            "font": "small"
+        },
+        "record_comment": {
+            "position": [0, 6],
+            "relative": {
+                "to": "record",
+                "align": "left"
+            }, 
+            "align": "left-top",
+            "font": "small"
+        },
+        "next_game_header": {
+            "position": [0, 8],
+            "relative": {
+                "to": "record_comment",
+                "align": "left"
+            }, 
+            "align": "left-top",
+            "font": "small"
+        },
+        "next_game": {
+            "position": [0, 7],
+            "relative": {
+                "to": "next_game_header",
+                "align": "left"
+            }, 
+            "align": "left-top",
+            "font": "small"
+        },
+         "last_game_header": {
+            "position": [0, 8],
+            "relative": {
+                "to": "next_game",
+                "align": "left"
+            }, 
+            "align": "left-top",
+            "font": "small"
+        },
+        "last_game_result": {
+            "position": [0, 7],
+            "relative": {
+                "to": "last_game_header",
+                "align": "left"
+            }, 
+            "align": "left-top",
+            "font": "small"
+        },
+        "primary_label": {
+            "position": [0, 35],
+            "align": "left-top",
+            "font": "small"
+        },
+        "primary_line1": {
+            "position": [0, 46],
+            "align": "left-top",
+            "font": "default_medium"
+        },
+        "primary_line2": {
+            "position": [0, 57],
+            "align": "left-top",
+            "font": "small"
+        },
+        "secondary_label": {
+            "position": [64, 35],
+            "align": "left-top",
+            "font": "small"
+        },
+        "secondary_line1": {
+            "position": [64, 46],
+            "align": "left-top",
+            "font": "default_medium"
+        },
+        "secondary_line2": {
+            "position": [64, 57],
+            "align": "left-top",
+            "font": "small"
+        }
+    }
+}

@@ -1,0 +1,7 @@
+{
+  "_default": { "zoom": 1.0, "offset": [0, 0] },
+  "BUF":      { "offset": [3, -2] },
+  "NO":       { "zoom": 1.0, "offset": [11, -17] },
+  "IND":       { "zoom": 0.9, "offset": [9, -13] },
+  "WSH":       { "zoom": 1.1, "offset": [-4, 0] }
+}
