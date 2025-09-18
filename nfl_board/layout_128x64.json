@@ -106,5 +106,39 @@
             "align": "left-top",
             "font": "small"
         }
+    },
+    "nfl_live_game": {
+        "away_team_logo": {
+            "position":[0, 0],
+            "align": "left"
+        },
+        "away_team_score": {
+            "position":[30, 0],
+            "align": "left"
+        },
+        "away_team_possesion": {
+            "position":[40, 0],
+            "align": "left"
+        },
+        "home_team_logo": {
+            "position":[0, 0],
+            "align": "left"
+        },
+        "home_team_score": {
+            "position":[30, 0],
+            "align": "left"
+        },
+        "home_team_possesion": {
+            "position":[40, 0],
+            "align": "left"
+        },
+        "quarter": {
+            "position":["50%", 30],
+            "align": "left"
+        },
+        "time_remaining": {
+            "position":["50%", 40],
+            "align": "center"
+        }
     }
 }

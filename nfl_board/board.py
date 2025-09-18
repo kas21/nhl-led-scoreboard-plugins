@@ -140,7 +140,7 @@ class NFLBoard(BoardBase):
             self._draw_text(layout, "record", team.record_summary)
             self._draw_text(layout, "record_comment", team.record_comment)
             self.matrix.draw_text_layout(layout.next_game_header, "NEXT GAME:", fillColor=team.color_primary, backgroundColor=team.color_secondary)
-            self.matrix.draw_text_layout(layout.next_game, self._format_opponent(self.next_game))
+            self.matrix.draw_text_layout(layout.next_game, f"{self._format_game_time(self.next_game)} {self._format_opponent(self.next_game)}")
             self.matrix.draw_text_layout(layout.last_game_header, "LAST GAME:", fillColor=team.color_primary, backgroundColor=team.color_secondary)
             #self.matrix.draw_text_layout(layout.last_game, self._format_opponent(self.last_game))
             self.matrix.draw_text_layout(layout.last_game_result, self._format_game_result(self.last_game))
@@ -255,9 +255,13 @@ class NFLBoard(BoardBase):
         return resampling
 
     def _format_opponent(self, game: NFLGame) -> str:
-        prefix = "VS" if game.is_home else "AT"
-        opponent = game.opponent_location or game.opponent_abbr or game.opponent_name
-        return f"{prefix} {opponent}".strip()
+        opponent = game.get_opponent(self.team_id)
+        if not opponent:
+            return "Unknown"
+
+        prefix = "VS" if game.is_home_team(self.team_id) else "AT"
+        opponent_text = opponent.location or opponent.abbreviation or opponent.name
+        return f"{prefix} {opponent_text}".strip()
 
     def _format_game_time(self, game: NFLGame) -> Optional[str]:
         if not game.date:
@@ -270,10 +274,12 @@ class NFLBoard(BoardBase):
         return f"{weekday} {local_dt.month}/{local_dt.day} {hour}:{minute:02d} {ampm}"
 
     def _format_game_result(self, game: NFLGame) -> str:
-        result = game.result_token() or ""
+        result = game.result_token(self.team_id) or ""
         score = ""
-        if game.our_score is not None and game.opponent_score is not None:
-            score = f"{game.our_score}-{game.opponent_score}"
+        our_score = game.get_team_score(self.team_id)
+        opponent_score = game.get_opponent_score(self.team_id)
+        if our_score is not None and opponent_score is not None:
+            score = f"{our_score}-{opponent_score}"
         opponent = self._format_opponent(game)
         return " ".join(part for part in [result, score, opponent] if part)
 
@@ -285,8 +291,9 @@ class NFLBoard(BoardBase):
         return None
 
     def _format_live_line(self, game: NFLGame) -> str:
-        opponent = game.opponent_abbr or game.opponent_name
-        our_score = game.our_score if game.our_score is not None else 0
-        opp_score = game.opponent_score if game.opponent_score is not None else 0
+        opponent = game.get_opponent(self.team_id)
+        opponent_name = opponent.abbreviation or opponent.name if opponent else "Unknown"
+        our_score = game.get_team_score(self.team_id) or 0
+        opp_score = game.get_opponent_score(self.team_id) or 0
         team_abbr = self.team.abbreviation if self.team else ""
-        return f"{team_abbr} {our_score}-{opp_score} {opponent}".strip()
+        return f"{team_abbr} {our_score}-{opp_score} {opponent_name}".strip()

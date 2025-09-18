@@ -79,31 +79,67 @@ class NFLTeam:
 
 @dataclass
 class NFLGame:
-    """Minimal game information used by the board."""
+    """Game information with home and away team objects."""
 
     event_id: str
     date: Optional[datetime]
-    opponent_name: str
-    opponent_abbr: str
-    opponent_location: str
-    is_home: bool
+    home_team: NFLTeam
+    away_team: NFLTeam
     status_state: str
     status_detail: str
     is_completed: bool
     is_live: bool
-    our_score: Optional[int]
-    opponent_score: Optional[int]
+    home_score: Optional[int]
+    away_score: Optional[int]
     venue: Optional[str] = None
 
-    def result_token(self) -> Optional[str]:
-        """Return ``W``/``L``/``T`` once the contest is final."""
-        if not self.is_completed or self.our_score is None or self.opponent_score is None:
+    def result_token(self, team_id: str) -> Optional[str]:
+        """Return ``W``/``L``/``T`` for the specified team once the contest is final."""
+        if not self.is_completed or self.home_score is None or self.away_score is None:
             return None
-        if self.our_score > self.opponent_score:
+
+        if self.home_team.id == team_id:
+            our_score = self.home_score
+            opponent_score = self.away_score
+        elif self.away_team.id == team_id:
+            our_score = self.away_score
+            opponent_score = self.home_score
+        else:
+            return None
+
+        if our_score > opponent_score:
             return "W"
-        if self.our_score < self.opponent_score:
+        if our_score < opponent_score:
             return "L"
         return "T"
+
+    def get_opponent(self, team_id: str) -> Optional[NFLTeam]:
+        """Get the opponent team for the specified team."""
+        if self.home_team.id == team_id:
+            return self.away_team
+        elif self.away_team.id == team_id:
+            return self.home_team
+        return None
+
+    def is_home_team(self, team_id: str) -> bool:
+        """Check if the specified team is playing at home."""
+        return self.home_team.id == team_id
+
+    def get_team_score(self, team_id: str) -> Optional[int]:
+        """Get the score for the specified team."""
+        if self.home_team.id == team_id:
+            return self.home_score
+        elif self.away_team.id == team_id:
+            return self.away_score
+        return None
+
+    def get_opponent_score(self, team_id: str) -> Optional[int]:
+        """Get the opponent's score for the specified team."""
+        if self.home_team.id == team_id:
+            return self.away_score
+        elif self.away_team.id == team_id:
+            return self.home_score
+        return None
 
 
 class NFLApiClient:
@@ -124,12 +160,21 @@ class NFLApiClient:
 
         team_json = self._get_json(f"teams/{team_id}")
         schedule_json = self._get_json(f"teams/{team_id}/schedule")
+        all_teams_json = self._get_json("teams")
 
         team = self._parse_team(team_json)
-        games = self._parse_schedule(schedule_json, team_id)
+        teams_lookup = self._build_teams_lookup(all_teams_json)
+        games = self._parse_schedule(schedule_json, team_id, teams_lookup)
 
         if team.logo_url:
             team.logo_path = self._ensure_logo(team.abbreviation, team.logo_url)
+
+        # Ensure logos for all teams in games
+        for game in games:
+            if game.home_team.logo_url and not game.home_team.logo_path:
+                game.home_team.logo_path = self._ensure_logo(game.home_team.abbreviation, game.home_team.logo_url)
+            if game.away_team.logo_url and not game.away_team.logo_path:
+                game.away_team.logo_path = self._ensure_logo(game.away_team.abbreviation, game.away_team.logo_url)
 
         return team, games
 
@@ -203,56 +248,141 @@ class NFLApiClient:
             logo_url=logo_url,
         )
 
-    def _parse_schedule(self, payload: dict, team_id: str) -> list[NFLGame]:
+    def _build_teams_lookup(self, payload: dict) -> dict[str, NFLTeam]:
+        """Build a lookup dictionary of all NFL teams."""
+        teams_lookup = {}
+        if "sports" in payload:
+            teams = payload["sports"][0]["leagues"][0]["teams"]
+            for team_data in teams:
+                team = self._parse_team_from_teams_endpoint(team_data["team"])
+                teams_lookup[team.id] = team
+        return teams_lookup
+
+    def _parse_schedule(self, payload: dict, team_id: str, teams_lookup: dict[str, NFLTeam]) -> list[NFLGame]:
         events = payload.get("events", [])
         games: list[NFLGame] = []
         team_id = str(team_id)
 
         for event in events:
-            game = self._parse_game(event, team_id)
+            game = self._parse_game(event, team_id, teams_lookup)
             if game:
                 games.append(game)
         return games
 
-    def _parse_game(self, event: dict, team_id: str) -> Optional[NFLGame]:
+    def _parse_team_from_teams_endpoint(self, team_info: dict) -> NFLTeam:
+        """Parse team data from the teams endpoint (different structure than team-specific endpoint)."""
+        record_summary = ""
+        record_comment = team_info.get("standingSummary")
+
+        record = team_info.get("record", {})
+        for item in record.get("items", []):
+            summary = item.get("summary")
+            if summary:
+                record_summary = summary
+                break
+
+        logos = team_info.get("logos") or []
+        logo_url = _pick_logo_url(logos)
+
+        color_primary = team_info.get("color") or ""
+        color_secondary = team_info.get("alternateColor") or ""
+
+        if color_primary:
+            color_primary = _hex_to_rgb(color_primary)
+        if color_secondary:
+            color_secondary = _hex_to_rgb(color_secondary)
+
+        return NFLTeam(
+            id=str(team_info.get("id")),
+            display_name=team_info.get("displayName") or team_info.get("name") or "",
+            abbreviation=team_info.get("abbreviation") or "",
+            location=team_info.get("location") or "",
+            name=team_info.get("name") or "",
+            color_primary=color_primary,
+            color_secondary=color_secondary,
+            record_summary=record_summary,
+            record_comment=record_comment,
+            logo_url=logo_url,
+        )
+
+    def _parse_game(self, event: dict, team_id: str, teams_lookup: dict[str, NFLTeam]) -> Optional[NFLGame]:
         competitions = event.get("competitions", [])
         competition = competitions[0] if competitions else {}
 
         competitors = competition.get("competitors", [])
-        our_side = None
-        opponent_side = None
+        home_competitor = None
+        away_competitor = None
 
         for comp in competitors:
-            team = comp.get("team", {})
-            comp_id = str(team.get("id") or comp.get("id"))
-            if comp_id == team_id:
-                our_side = comp
+            if comp.get("homeAway") == "home":
+                home_competitor = comp
             else:
-                opponent_side = comp
+                away_competitor = comp
 
-        if our_side is None or opponent_side is None:
+        if home_competitor is None or away_competitor is None:
+            return None
+
+        home_team_id = str(home_competitor.get("team", {}).get("id"))
+        away_team_id = str(away_competitor.get("team", {}).get("id"))
+
+        # Get teams from lookup, fallback to parsing from competitor data
+        home_team = teams_lookup.get(home_team_id)
+        if not home_team:
+            home_team = self._parse_team_from_competitor(home_competitor)
+
+        away_team = teams_lookup.get(away_team_id)
+        if not away_team:
+            away_team = self._parse_team_from_competitor(away_competitor)
+
+        if not home_team or not away_team:
             return None
 
         status = competition.get("status", {}).get("type", {})
         state = competition.get("state", "")
         detail = competition.get("detail") or status.get("shortDetail") or ""
 
-        opponent_team = opponent_side.get("team", {})
-
         return NFLGame(
             event_id=str(event.get("id")),
             date=_parse_datetime(event.get("date")),
-            opponent_name=opponent_team.get("displayName") or opponent_team.get("name") or "",
-            opponent_abbr=opponent_team.get("abbreviation") or "",
-            opponent_location=opponent_team.get("location") or "",
-            is_home=(our_side.get("homeAway") == "home"),
+            home_team=home_team,
+            away_team=away_team,
             status_state=state,
             status_detail=detail,
             is_completed=bool(status.get("completed")),
             is_live=(state == "in"),
-            our_score=_safe_int(our_side.get("score", {}).get("displayValue" or None)),
-            opponent_score=_safe_int(opponent_side.get("score", {}).get("displayValue" or None)),
+            home_score=_safe_int(home_competitor.get("score", {}).get("displayValue")),
+            away_score=_safe_int(away_competitor.get("score", {}).get("displayValue")),
             venue=self._extract_venue(competition),
+        )
+
+    def _parse_team_from_competitor(self, competitor: dict) -> Optional[NFLTeam]:
+        """Parse team data from competitor data in schedule (fallback method)."""
+        team_info = competitor.get("team", {})
+        if not team_info:
+            return None
+
+        logos = team_info.get("logos") or []
+        logo_url = _pick_logo_url(logos)
+
+        color_primary = team_info.get("color") or ""
+        color_secondary = team_info.get("alternateColor") or ""
+
+        if color_primary:
+            color_primary = _hex_to_rgb(color_primary)
+        if color_secondary:
+            color_secondary = _hex_to_rgb(color_secondary)
+
+        return NFLTeam(
+            id=str(team_info.get("id")),
+            display_name=team_info.get("displayName") or team_info.get("name") or "",
+            abbreviation=team_info.get("abbreviation") or "",
+            location=team_info.get("location") or "",
+            name=team_info.get("name") or "",
+            color_primary=color_primary,
+            color_secondary=color_secondary,
+            record_summary="",  # Not available in competitor data
+            record_comment=None,
+            logo_url=logo_url,
         )
 
     def _extract_venue(self, competition: dict) -> Optional[str]:
