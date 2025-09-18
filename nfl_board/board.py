@@ -145,7 +145,6 @@ class NFLBoard(BoardBase):
             #self.matrix.draw_text_layout(layout.last_game, self._format_opponent(self.last_game))
             self.matrix.draw_text_layout(layout.last_game_result, self._format_game_result(self.last_game))
 
-        #self._render_event_sections(layout)
 
         self.matrix.render()
         self.sleepEvent.wait(self.display_seconds)
@@ -199,38 +198,6 @@ class NFLBoard(BoardBase):
         }
         return snapshot
 
-
-    
-    # def _refresh_data(self) -> None:
-    #     if not self.team_id:
-    #         return
-
-    #     try:
-    #         team, games = self.api_client.fetch_team_payload(self.team_id)
-    #     except Exception as exc:  # pragma: no cover - network failure handling
-    #         debug.error(f"NFL board: failed to fetch data - {exc}")
-    #         self.error_message = "NFL data unavailable"
-    #         self.last_refresh = datetime.datetime.now(datetime.timezone.utc)
-    #         return
-
-    #     self.team = team
-    #     self.error_message = None
-
-    #     self.live_game = next((g for g in games if g.is_live), None)
-    #     completed = [g for g in games if g.is_completed]
-    #     upcoming = [g for g in games if not g.is_completed and not g.is_live]
-
-    #     min_dt = datetime.datetime.min.replace(tzinfo=datetime.timezone.utc)
-    #     max_dt = datetime.datetime.max.replace(tzinfo=datetime.timezone.utc)
-
-    #     completed.sort(key=lambda g: g.date or min_dt)
-    #     upcoming.sort(key=lambda g: g.date or max_dt)
-
-    #     self.last_game = completed[-1] if completed else None
-    #     self.next_game = upcoming[0] if upcoming else None
-
-    #     self.last_refresh = datetime.datetime.now(datetime.timezone.utc)
-
     def _draw_text(self, layout, element: str, text: Optional[str]) -> None:
         if not text:
             return
@@ -280,49 +247,12 @@ class NFLBoard(BoardBase):
 
         self.matrix.draw_image_layout(element, logo)
 
-
     @staticmethod
     def _thumbnail_filter():
         resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS", None)
         if resampling is None:
             resampling = getattr(Image, "LANCZOS", getattr(Image, "ANTIALIAS", Image.BICUBIC))
         return resampling
-
-    def _render_event_sections(self, layout) -> None:
-        if self.live_game:
-            label = "Live"
-            line1 = self._format_live_line(self.live_game)
-            line2 = self.live_game.status_detail
-        elif self.next_game:
-            label = "Next"
-            line1 = self._format_opponent(self.next_game)
-            line2 = self._format_game_time(self.next_game)
-        else:
-            label = "Next"
-            line1 = "No upcoming games"
-            line2 = None
-
-        self._draw_text(layout, "primary_label", label)
-        self._draw_text(layout, "primary_line1", line1)
-        self._draw_text(layout, "primary_line2", line2)
-
-        if self.live_game and self.next_game:
-            # Rare scenario where a live game exists and schedule also returned a later game.
-            last_label = "Next"
-            last_line1 = self._format_opponent(self.next_game)
-            last_line2 = self._format_game_time(self.next_game)
-        elif self.last_game:
-            last_label = "Last"
-            last_line1 = self._format_last_line(self.last_game)
-            last_line2 = self._format_last_detail(self.last_game)
-        else:
-            last_label = "Last"
-            last_line1 = "No previous game"
-            last_line2 = None
-
-        self._draw_text(layout, "secondary_label", last_label)
-        self._draw_text(layout, "secondary_line1", last_line1)
-        self._draw_text(layout, "secondary_line2", last_line2)
 
     def _format_opponent(self, game: NFLGame) -> str:
         prefix = "VS" if game.is_home else "AT"
