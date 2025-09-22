@@ -1,7 +1,69 @@
 {
-  "_default": { "zoom": 1.0, "offset": [0, 0] },
-  "BUF":      { "offset": [3, -2] },
-  "NO":       { "zoom": 1.0, "offset": [11, -17] },
-  "IND":       { "zoom": 0.9, "offset": [9, -13] },
-  "WSH":       { "zoom": 1.1, "offset": [-4, 0] }
+    "_default": { "zoom": 1.0, "offset": [0, 0] },
+    "NO":       { "zoom": 1.0, "offset": [11, -17] },
+    "ATL": {
+        "team_logo": {"zoom": 1.0, "offset": [0, 0] },
+        "home_team_logo": { "zoom": 1.0, "offset": [0, 0] },
+        "away_team_logo": { "zoom": 1.0, "offset": [-10, 0] }
+    },
+    "CLE": {
+        "team_logo": {"zoom": 1.0, "offset": [0, 0] },
+        "home_team_logo": { "zoom": 1.0, "offset": [8, 0] },
+        "away_team_logo": { "zoom": 1.0, "offset": [0, 0] }
+    },
+    "CIN": {
+        "team_logo": {"zoom": 1.0, "offset": [0, 0] },
+        "home_team_logo": { "zoom": 1.0, "offset": [0, 0] },
+        "away_team_logo": { "zoom": 1.0, "offset": [-5, 0] }
+    },
+    "GB": {
+        "team_logo": {"zoom": 1.0, "offset": [0, 0] },
+        "home_team_logo": { "zoom": 1.0, "offset": [0, 0] },
+        "away_team_logo": { "zoom": 1.0, "offset": [-5, 0] }
+    },
+    "IND": {
+        "team_logo": {"zoom": 1.0, "offset": [0, 0] },
+        "home_team_logo": { "zoom": 1.0, "offset": [0, 0] },
+        "away_team_logo": { "zoom": 0.9, "offset": [-5, 0] }
+    },
+    "LAC": {
+        "team_logo": {"zoom": 1.0, "offset": [0, 0] },
+        "home_team_logo": { "zoom": 1.3, "offset": [0, 0] },
+        "away_team_logo": { "zoom": 1.3, "offset": [0, 0] }
+    },
+    "NE": {
+        "team_logo": {"zoom": 1.0, "offset": [0, 0] },
+        "home_team_logo": { "zoom": 1.3, "offset": [0, 0] },
+        "away_team_logo": { "zoom": 1.3, "offset": [0, 0] }
+    },
+    "PHI": {
+        "team_logo": {"zoom": 1.0, "offset": [0, 0] },
+        "home_team_logo": { "zoom": 1.2, "offset": [0, 0] },
+        "away_team_logo": { "zoom": 1.2, "offset": [0, 0] }
+    },
+    "PIT": {
+        "team_logo": {"zoom": 1.0, "offset": [0, 0] },
+        "home_team_logo": { "zoom": 0.9, "offset": [0, 0] },
+        "away_team_logo": { "zoom": 0.9, "offset": [-2, 0] }
+    },
+    "WSH": {
+        "team_logo": {"zoom": 1.1, "offset": [-4, 0] },
+        "home_team_logo": { "zoom": 1.0, "offset": [0, 0] },
+        "away_team_logo": { "zoom": 1.0, "offset": [0, 0] }
+    },
+    "TEN":       {
+        "team_logo": {"zoom": 1.0, "offset": [0, 0] },
+        "home_team_logo": { "zoom": 1.2, "offset": [0, 0] },
+        "away_team_logo": { "zoom": 1.3, "offset": [0, 0] }
+    },
+    "MIA": {
+        "team_logo": {"zoom": 1.1, "offset": [-4, 0] },
+        "home_team_logo": { "zoom": 1.0, "offset": [0, 0] },
+        "away_team_logo": { "zoom": 1.2, "offset": [-20, 0] }
+    },
+    "BUF": {
+        "team_logo": {"zoom": 1.1, "offset": [-4, 0] },
+        "home_team_logo": { "zoom": 1.4, "offset": [0, 7] },
+        "away_team_logo": { "zoom": 1.4, "offset": [0, 0] }
+    }
 }

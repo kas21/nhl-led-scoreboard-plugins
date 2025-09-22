@@ -3,7 +3,7 @@
         "position": [0, 0],
         "align": "left-top"
     },
-    "nfl_board": {
+    "nfl_team_summary": {
         "team_logo": {
             "position": ["48%", 15],
             "align": "left-top"
@@ -109,36 +109,67 @@
     },
     "nfl_live_game": {
         "away_team_logo": {
-            "position":[0, 0],
-            "align": "left"
+            "position":[0, "50%"],
+            "align": "left-center"
         },
         "away_team_score": {
-            "position":[30, 0],
-            "align": "left"
+            "position":["33%", "100%"],
+            "align": "right-bottom"
         },
         "away_team_possesion": {
             "position":[40, 0],
             "align": "left"
         },
         "home_team_logo": {
-            "position":[0, 0],
-            "align": "left"
+            "position":["100%", "50%"],
+            "align": "right-center"
         },
         "home_team_score": {
-            "position":[30, 0],
-            "align": "left"
+            "position":["66%", "100%"],
+            "align": "left-bottom"
         },
         "home_team_possesion": {
             "position":[40, 0],
             "align": "left"
         },
-        "quarter": {
-            "position":["50%", 30],
-            "align": "left"
-        },
         "time_remaining": {
-            "position":["50%", 40],
-            "align": "center"
+            "position":["50%", 0],
+            "align": "center",
+            "font": "small"
+        },
+        "start_time": {
+            "position":["50%", 0],
+            "align": "center",
+            "font": "small"
+        },
+        "quarter": {
+            "position":[0, 1],
+            "relative": {
+                "to": "time_remaining",
+                "align": "left-bottom"
+            }
+        },
+        "VS": {
+            "position": ["50%", "45%"],
+            "align": "center-top",
+            "font": "medium"
+        },
+        "score": {
+            "position": ["50%", "45%"],
+            "align": "center-top",
+            "font": "medium"
+        },
+        "scheduled_date": {
+            "position": ["50%", 0],
+            "align": "center-top"
+        },
+        "scheduled_time": {
+            "position": [0, 2],
+            "relative": {
+                "to": "scheduled_date",
+                "align": "center-bottom"
+            },
+            "align": "center-top"
         }
     }
 }

@@ -92,6 +92,9 @@ class NFLGame:
     home_score: Optional[int]
     away_score: Optional[int]
     venue: Optional[str] = None
+    quarter: Optional[str] = None
+    time_remaining: Optional[str] = None
+    possession_team_id: Optional[str] = None
 
     def result_token(self, team_id: str) -> Optional[str]:
         """Return ``W``/``L``/``T`` for the specified team once the contest is final."""
@@ -141,6 +144,18 @@ class NFLGame:
             return self.home_score
         return None
 
+    def has_possession(self, team_id: str) -> bool:
+        """Check if the specified team has possession."""
+        return self.possession_team_id == team_id
+
+    def get_possession_team(self) -> Optional[NFLTeam]:
+        """Get the team that currently has possession."""
+        if self.possession_team_id == self.home_team.id:
+            return self.home_team
+        elif self.possession_team_id == self.away_team.id:
+            return self.away_team
+        return None
+
 
 class NFLApiClient:
     """Thin wrapper around ESPN's public NFL endpoints."""
@@ -155,28 +170,104 @@ class NFLApiClient:
     # ---------------------------------------------------------------------
     # Public API
 
-    def fetch_team_payload(self, team_id: str) -> tuple[NFLTeam, list[NFLGame]]:
-        """Fetch team metadata plus their schedule."""
+    def fetch_nfl_payload(self, team_id: str) -> tuple[NFLTeam, list[NFLGame], list[NFLGame]]:
+        """Fetch team metadata, their schedule, and today's games."""
 
+        # Fetch all data
         team_json = self._get_json(f"teams/{team_id}")
         schedule_json = self._get_json(f"teams/{team_id}/schedule")
         all_teams_json = self._get_json("teams")
+        scoreboard_json = self._get_json("scoreboard")
 
+        # Parse team and build teams lookup
         team = self._parse_team(team_json)
         teams_lookup = self._build_teams_lookup(all_teams_json)
-        games = self._parse_schedule(schedule_json, team_id, teams_lookup)
 
+        # Parse all games from both endpoints using refactored methods
+        schedule_games = self._parse_all_games(schedule_json, teams_lookup)
+        scoreboard_games = self._parse_all_games(scoreboard_json, teams_lookup)
+
+        # Filter to get team-specific games and today's games
+        team_games = self._filter_team_games(schedule_games, team_id)
+        todays_games = self._filter_todays_games(scoreboard_games)
+
+        # Ensure team logo
         if team.logo_url:
             team.logo_path = self._ensure_logo(team.abbreviation, team.logo_url)
 
-        # Ensure logos for all teams in games
-        for game in games:
+        # Ensure logos for all teams in team games
+        for game in team_games:
             if game.home_team.logo_url and not game.home_team.logo_path:
                 game.home_team.logo_path = self._ensure_logo(game.home_team.abbreviation, game.home_team.logo_url)
             if game.away_team.logo_url and not game.away_team.logo_path:
                 game.away_team.logo_path = self._ensure_logo(game.away_team.abbreviation, game.away_team.logo_url)
 
-        return team, games
+        # Ensure logos for today's games
+        for game in todays_games:
+            if game.home_team.logo_url and not game.home_team.logo_path:
+                game.home_team.logo_path = self._ensure_logo(game.home_team.abbreviation, game.home_team.logo_url)
+            if game.away_team.logo_url and not game.away_team.logo_path:
+                game.away_team.logo_path = self._ensure_logo(game.away_team.abbreviation, game.away_team.logo_url)
+
+        # Update live game with real-time scores if there is one in team games
+        live_games = self._filter_live_games(team_games)
+        if live_games:
+            # Update the first live game found (usually only one per team)
+            live_games[0] = self.update_live_game_scores(live_games[0])
+
+        return team, team_games, todays_games
+
+    def update_live_game_scores(self, live_game: NFLGame) -> NFLGame:
+        """Update live game with current scores from scoreboard API."""
+        try:
+            scoreboard_json = self._get_json("scoreboard")
+
+            # Find matching game by event_id
+            for game in scoreboard_json.get("events", []):
+                if str(game.get("id")) == live_game.event_id:
+                    # Update scores and status from live data
+                    competitions = game.get("competitions", [])
+                    if competitions:
+                        competition = competitions[0]
+                        competitors = competition.get("competitors", [])
+
+                        for comp in competitors:
+                            if comp.get("homeAway") == "home":
+                                live_game.home_score = _safe_int(comp.get("score", None))
+                            else:
+                                live_game.away_score = _safe_int(comp.get("score", None))
+
+                        # Update status information
+                        status = competition.get("status", {}).get("type", {})
+                        live_game.status_state = status.get("state", live_game.status_state)
+                        live_game.status_detail = competition.get("detail") or status.get("shortDetail") or live_game.status_detail
+                        live_game.is_completed = bool(status.get("completed"))
+                        live_game.is_live = (live_game.status_state == "in")
+
+                        # Update quarter, time, and possession for live games
+                        if live_game.is_live:
+                            # Get quarter and time from status
+                            quarter = status.get("period")
+                            if quarter:
+                                live_game.quarter = str(quarter)
+
+                            # Get clock time
+                            clock = status.get("clock")
+                            if clock:
+                                live_game.time_remaining = str(clock)
+
+                            # Get possession information if available
+                            situation = competition.get("situation")
+                            if situation:
+                                possession_info = situation.get("possession")
+                                if possession_info:
+                                    live_game.possession_team_id = str(possession_info)
+                    break
+
+        except Exception as exc:
+            debug.error(f"NFL board: failed to update live game scores - {exc}")
+
+        return live_game
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -258,13 +349,13 @@ class NFLApiClient:
                 teams_lookup[team.id] = team
         return teams_lookup
 
-    def _parse_schedule(self, payload: dict, team_id: str, teams_lookup: dict[str, NFLTeam]) -> list[NFLGame]:
+    def _parse_all_games(self, payload: dict, teams_lookup: dict[str, NFLTeam]) -> list[NFLGame]:
+        """Parse all games from schedule or scoreboard data, regardless of team."""
         events = payload.get("events", [])
         games: list[NFLGame] = []
-        team_id = str(team_id)
 
         for event in events:
-            game = self._parse_game(event, team_id, teams_lookup)
+            game = self._parse_game_data(event, teams_lookup)
             if game:
                 games.append(game)
         return games
@@ -305,7 +396,8 @@ class NFLApiClient:
             logo_url=logo_url,
         )
 
-    def _parse_game(self, event: dict, team_id: str, teams_lookup: dict[str, NFLTeam]) -> Optional[NFLGame]:
+    def _parse_game_data(self, event: dict, teams_lookup: dict[str, NFLTeam]) -> Optional[NFLGame]:
+        """Parse game data for any game, regardless of team involvement."""
         competitions = event.get("competitions", [])
         competition = competitions[0] if competitions else {}
 
@@ -338,8 +430,31 @@ class NFLApiClient:
             return None
 
         status = competition.get("status", {}).get("type", {})
-        state = competition.get("state", "")
+        state = status.get("state", "")
         detail = competition.get("detail") or status.get("shortDetail") or ""
+
+        # Extract quarter and time information
+        quarter = None
+        time_remaining = None
+        possession_team_id = None
+
+        if state == "in":  # Only extract live game details for in-progress games
+            # Get quarter and time from status
+            quarter = status.get("period")
+            if quarter:
+                quarter = str(quarter)
+
+            # Get clock time
+            clock = status.get("clock")
+            if clock:
+                time_remaining = str(clock)
+
+            # Get possession information if available
+            situation = competition.get("situation", None)
+            if situation:
+                possession_info = situation.get("possession", None)
+                if possession_info:
+                    possession_team_id = str(possession_info or "")
 
         return NFLGame(
             event_id=str(event.get("id")),
@@ -350,9 +465,14 @@ class NFLApiClient:
             status_detail=detail,
             is_completed=bool(status.get("completed")),
             is_live=(state == "in"),
-            home_score=_safe_int(home_competitor.get("score", {}).get("displayValue")),
-            away_score=_safe_int(away_competitor.get("score", {}).get("displayValue")),
+            #home_score=_safe_int(home_competitor.get("score", {}).get("displayValue")),
+            #away_score=_safe_int(away_competitor.get("score", {}).get("displayValue")),
+            home_score=_safe_int(home_competitor.get("score", {})),
+            away_score=_safe_int(away_competitor.get("score", {})),
             venue=self._extract_venue(competition),
+            quarter=quarter,
+            time_remaining=time_remaining,
+            possession_team_id=possession_team_id,
         )
 
     def _parse_team_from_competitor(self, competitor: dict) -> Optional[NFLTeam]:
@@ -395,3 +515,42 @@ class NFLApiClient:
         if address.get("city"):
             return address.get("city")
         return None
+
+    # ------------------------------------------------------------------
+    # Filtering methods
+
+    def _filter_team_games(self, games: list[NFLGame], team_id: str) -> list[NFLGame]:
+        """Filter games to only include those where the specified team participates."""
+        team_id = str(team_id)
+        return [
+            game for game in games
+            if game.home_team.id == team_id or game.away_team.id == team_id
+        ]
+
+    def _filter_todays_games(self, games: list[NFLGame]) -> list[NFLGame]:
+        """Filter games to only include those happening today in local timezone."""
+        from datetime import datetime
+        today = datetime.now().date()
+        debug.info(f"Todays NFL Games: {len(games)}")
+
+        todays_games: list[NFLGame] = []
+        for game in games:
+            if not game.date:
+                continue
+            game_date = game.date.astimezone().date()
+            if game_date == today:
+                todays_games.append(game)
+
+        return todays_games
+
+    def _filter_live_games(self, games: list[NFLGame]) -> list[NFLGame]:
+        """Filter games to only include those currently live."""
+        return [game for game in games if game.is_live]
+
+    def _filter_completed_games(self, games: list[NFLGame]) -> list[NFLGame]:
+        """Filter games to only include completed games."""
+        return [game for game in games if game.is_completed]
+
+    def _filter_upcoming_games(self, games: list[NFLGame]) -> list[NFLGame]:
+        """Filter games to only include upcoming (not completed, not live) games."""
+        return [game for game in games if not game.is_completed and not game.is_live]
