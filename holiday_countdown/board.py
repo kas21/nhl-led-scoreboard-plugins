@@ -136,18 +136,14 @@ class HolidayCountdownBoard(BoardBase):
         self.rows = self.matrix.height
         self.cols = self.matrix.width
 
-        self.today = date.today()
-
-        # # Paths from config
-        # self.themes_path = getattr(self.data.config, "holiday_countdown_themes_path", "")
-        # self.custom_holidays_path = getattr(self.data.config, "holiday_countdown_custom_csv", "")
-
         # Load user data
         self.themes = load_themes(self.themes_path)
-        self.custom_rows = load_custom_holidays(self.custom_holidays_path, self.today)
 
-        # Precompute upcoming list
-        self.upcoming_holidays: list[tuple[date, str]] = self._compute_upcoming()
+        # Date-dependent data will be computed fresh in render()
+        self._last_computed_date = None
+        self.today = None
+        self.custom_rows = []
+        self.upcoming_holidays: list[tuple[date, str]] = []
 
         # Image cache
         self._image_cache: dict[str, Image.Image] = {}
@@ -167,6 +163,14 @@ class HolidayCountdownBoard(BoardBase):
     # -------- Rendering --------
 
     def render(self):
+        # Refresh date-dependent data if date has changed
+        today = date.today()
+        if self._last_computed_date != today:
+            self.today = today
+            self.custom_rows = load_custom_holidays(self.custom_holidays_path, self.today)
+            self.upcoming_holidays = self._compute_upcoming()
+            self._last_computed_date = today
+
         self.matrix.clear()
 
         layout = self.get_board_layout("holiday_countdown")
