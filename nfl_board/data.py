@@ -301,7 +301,7 @@ class NFLApiClient:
 
     def _get_json(self, path: str) -> dict:
         url = f"{self.BASE_URL}/{path.lstrip('/')}"
-        debug.info(f"NFL board: fetching {url}")
+        debug.log(f"NFL board: fetching {url}")
         response = self.session.get(url, timeout=10)
         response.raise_for_status()
         return response.json()
