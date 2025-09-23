@@ -5,9 +5,10 @@
     "ignored_holidays": [
         "Columbus Day",
         "Veterans Day",
-        "Election Day"
+        "Election Day",
+        "Martin Luther King Jr. Day"
     ],
-    "horizon_days": 120,
+    "horizon_days": 60,
     "themes_path": "holiday_themes.json",
     "custom_holidays_path": "custom_holidays.csv",
     "display_seconds": 5,

@@ -38,3 +38,9 @@ MANIFEST
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
+
+# Ignore Config Files
+config.json
+
+# Ignore Custom Holiday File
+custom_holiday.csv
