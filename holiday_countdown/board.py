@@ -180,7 +180,7 @@ class HolidayCountdownBoard(BoardBase):
         for dt, name in self.upcoming_holidays:
             if name in self.ignored_holidays:
                 continue
-            
+            debug.info(f"Rendering {name} board")
             self.matrix.clear()
 
             days_til = (dt - self.today).days
