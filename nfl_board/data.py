@@ -558,8 +558,18 @@ class NFLApiClient:
             if image.mode != 'RGBA':
                 image = image.convert('RGBA')
 
+            # Trim Transparency
+            bbox = image.getbbox()
+            image = image.crop(bbox)
+            # Keep aspect ratio but ensure the longest edge is equal to size.
+            resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS", None)
+            if resampling is None:
+                resampling = getattr(Image, "LANCZOS", getattr(Image, "ANTIALIAS", Image.BICUBIC))
+            image.thumbnail((size, size), resampling)
+            
+
             # Resize to target size while maintaining aspect ratio
-            image.thumbnail((size, size), Image.Resampling.LANCZOS)
+            #image.thumbnail((size, size), Image.Resampling.LANCZOS)
 
             # Create a square canvas and center the logo
             square_image = Image.new('RGBA', (size, size), (255, 255, 255, 0))
@@ -580,7 +590,7 @@ class NFLApiClient:
             debug.error(f"NFL Board: Failed to download logo for {team.abbreviation}: {exc}")
             return None
 
-    def get_team_logo_path(self, team: NFLTeam, size: int = 64, download_if_missing: bool = True) -> Optional[Path]:
+    def get_team_logo_path(self, team: NFLTeam, size: int = 128, download_if_missing: bool = True) -> Optional[Path]:
         """
         Get the local path to a team's logo, optionally downloading if missing.
 

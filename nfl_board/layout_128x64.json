@@ -5,7 +5,7 @@
     },
     "nfl_team_summary": {
         "team_logo": {
-            "position": ["48%", 15],
+            "position": ["48%", 1],
             "align": "left-top"
         },
         "team_name": {

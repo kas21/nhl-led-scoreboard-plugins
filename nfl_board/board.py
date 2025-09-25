@@ -687,7 +687,7 @@ class NFLBoard(BoardBase):
 
         try:
             # First try the API client's logo path resolution and download functionality
-            logo_path = self.api_client.get_team_logo_path(team, size=64, download_if_missing=True)
+            logo_path = self.api_client.get_team_logo_path(team, size=128, download_if_missing=True)
 
             if logo_path and logo_path.exists():
                 logo_image = Image.open(logo_path)
