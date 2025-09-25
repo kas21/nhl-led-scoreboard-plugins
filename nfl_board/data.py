@@ -9,6 +9,8 @@ from datetime import datetime, timedelta, time
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
 from pathlib import Path
+from PIL import Image
+import io
 
 
 def parse_espn_datetime(value: Optional[str]) -> Optional[datetime]:
@@ -135,9 +137,12 @@ class NFLApiClient:
 
     def __init__(self, logo_cache_directory: Optional[Path] = None):
         self.base_url = "https://site.api.espn.com/apis/site/v2/sports/football/nfl"
-        self.logo_cache_directory = logo_cache_directory
+        self.logo_cache_directory = logo_cache_directory or Path("assets/logos/nfl")
         self.teams_cache: Dict[str, NFLTeam] = {}
         self.last_teams_fetch: Optional[datetime] = None
+
+        # Ensure logo cache directory exists
+        self.logo_cache_directory.mkdir(parents=True, exist_ok=True)
 
     def get_scoreboard_for_date(self, date: datetime) -> List[NFLGame]:
         """
@@ -515,6 +520,111 @@ class NFLApiClient:
             return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
         except (ValueError, TypeError):
             return (255, 255, 255)  # Default to white
+
+    def download_team_logo(self, team: NFLTeam, size: int = 64) -> Optional[Path]:
+        """
+        Download and cache a team logo as a PNG file.
+
+        Args:
+            team: NFLTeam object with logo_url
+            size: Target size for the logo (default 64px)
+
+        Returns:
+            Path to cached logo file, or None if download failed
+        """
+        if not team.logo_url:
+            debug.warning(f"NFL Board: No logo URL for team {team.abbreviation}")
+            return None
+
+        # Generate cache filename
+        cache_filename = f"{team.abbreviation.lower()}_{size}px.png"
+        cache_path = self.logo_cache_directory / cache_filename
+
+        # Return existing cached file if it exists
+        if cache_path.exists():
+            return cache_path
+
+        try:
+            debug.info(f"NFL Board: Downloading logo for {team.abbreviation} from {team.logo_url}")
+
+            # Download the logo
+            response = requests.get(team.logo_url, timeout=10)
+            response.raise_for_status()
+
+            # Open and resize the image
+            image = Image.open(io.BytesIO(response.content))
+
+            # Convert to RGBA if not already (for transparency support)
+            if image.mode != 'RGBA':
+                image = image.convert('RGBA')
+
+            # Resize to target size while maintaining aspect ratio
+            image.thumbnail((size, size), Image.Resampling.LANCZOS)
+
+            # Create a square canvas and center the logo
+            square_image = Image.new('RGBA', (size, size), (255, 255, 255, 0))
+
+            # Calculate position to center the logo
+            x = (size - image.width) // 2
+            y = (size - image.height) // 2
+
+            square_image.paste(image, (x, y), image)
+
+            # Save as PNG
+            square_image.save(cache_path, 'PNG')
+
+            debug.info(f"NFL Board: Cached logo for {team.abbreviation} at {cache_path}")
+            return cache_path
+
+        except Exception as exc:
+            debug.error(f"NFL Board: Failed to download logo for {team.abbreviation}: {exc}")
+            return None
+
+    def get_team_logo_path(self, team: NFLTeam, size: int = 64, download_if_missing: bool = True) -> Optional[Path]:
+        """
+        Get the local path to a team's logo, optionally downloading if missing.
+
+        Args:
+            team: NFLTeam object
+            size: Target logo size (default 64px)
+            download_if_missing: Whether to download the logo if not cached
+
+        Returns:
+            Path to logo file, or None if not available
+        """
+        cache_filename = f"{team.abbreviation.lower()}_{size}px.png"
+        cache_path = self.logo_cache_directory / cache_filename
+
+        # Return existing cached file
+        if cache_path.exists():
+            return cache_path
+
+        # Download if requested and URL available
+        if download_if_missing and team.logo_url:
+            return self.download_team_logo(team, size)
+
+        return None
+
+    def preload_logos_for_teams(self, teams: List[NFLTeam], size: int = 64) -> int:
+        """
+        Preload logos for a list of teams.
+
+        Args:
+            teams: List of NFLTeam objects
+            size: Target logo size (default 64px)
+
+        Returns:
+            Number of logos successfully downloaded/cached
+        """
+        success_count = 0
+
+        for team in teams:
+            logo_path = self.get_team_logo_path(team, size, download_if_missing=True)
+            if logo_path:
+                success_count += 1
+
+        debug.info(f"NFL Board: Preloaded {success_count}/{len(teams)} team logos")
+        return success_count
 
 
 class NFLDataSnapshot:

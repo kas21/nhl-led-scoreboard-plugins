@@ -679,22 +679,23 @@ class NFLBoard(BoardBase):
         self.sleepEvent.wait(self.config.display_seconds)
 
     def _get_team_logo(self, team: NFLTeam) -> Optional[Image.Image]:
-        """Get team logo image with caching."""
+        """Get team logo image with caching and automatic downloading."""
         cache_key = f"{team.abbreviation}_logo"
 
         if cache_key in self.logo_cache:
             return self.logo_cache[cache_key]
 
         try:
-            logo_path = self._get_board_directory() / "logos" / f"{team.abbreviation.lower()}.png"
+            # First try the API client's logo path resolution and download functionality
+            logo_path = self.api_client.get_team_logo_path(team, size=64, download_if_missing=True)
 
-            if logo_path.exists():
+            if logo_path and logo_path.exists():
                 logo_image = Image.open(logo_path)
-                #logo_image = logo_image.resize((64, 64), Image.Resampling.LANCZOS)
                 self.logo_cache[cache_key] = logo_image
+                debug.log(f"NFL Board: Loaded logo for {team.abbreviation} from {logo_path}")
                 return logo_image
-            else:
-                debug.info(f"NFL Board: No logo file found for {team.abbreviation}")
+
+            debug.info(f"NFL Board: No logo available for {team.abbreviation} (URL: {team.logo_url})")
 
         except Exception as error:
             debug.error(f"NFL Board: Failed to load logo for {team.abbreviation}: {error}")
