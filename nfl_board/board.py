@@ -180,7 +180,7 @@ class NFLBoard(BoardBase):
         try:
             # Update display games if needed
             if self._should_refresh_display_games():
-                debug.info("NFL Board: Refreshing display games")
+                debug.log("NFL Board: Refreshing display games")
                 self._refresh_display_games()
 
             debug.info(f"NFL Board: Have {len(self.current_display_items)} total items to display")
@@ -200,7 +200,6 @@ class NFLBoard(BoardBase):
 
                 # Render based on item type
                 if isinstance(item, NFLGame):
-                    debug.info(f"NFL Board: Displaying game {item.away_team.abbreviation} @ {item.home_team.abbreviation}")
                     if item.is_live:
                         self._render_live_game(item)
                     elif item.is_final:
@@ -208,7 +207,6 @@ class NFLBoard(BoardBase):
                     else:
                         self._render_upcoming_game(item)
                 elif isinstance(item, NFLTeam):
-                    debug.info(f"NFL Board: Displaying team summary for {item.display_name}")
                     self._render_team_summary(item)
                 else:
                     debug.warning(f"NFL Board: Unknown item type: {type(item)}, skipping")
@@ -318,7 +316,7 @@ class NFLBoard(BoardBase):
             # This gives us full records, standings info, etc.
             all_team_ids = list(all_teams.keys())
             detailed_count = self.api_client.populate_team_details(all_team_ids)
-            debug.info(f"NFL Board: Loaded detailed data for {detailed_count} total teams")
+            debug.log(f"NFL Board: Loaded detailed data for {detailed_count} total teams")
 
             # Get favorite teams subset (now with detailed records)
             snapshot.favorite_teams = {
@@ -546,8 +544,8 @@ class NFLBoard(BoardBase):
     def _render_team_summary(self, team: NFLTeam):
         """Render team summary display showing team info, record, next/last games."""
         debug.info(f"NFL Board: Rendering team summary for {team.display_name}")
-        debug.info(f"NFL Board: Team record: {team.record_text} (detailed: {team.has_detailed_record})")
-        debug.info(f"NFL Board: Team colors: {team.color_primary}, {team.color_secondary}")
+        debug.log(f"NFL Board: Team record: {team.record_text} (detailed: {team.has_detailed_record})")
+        debug.log(f"NFL Board: Team colors: {team.color_primary}, {team.color_secondary}")
 
         if not team.has_detailed_record:
             debug.warning(f"NFL Board: Team {team.display_name} using basic data - detailed record not loaded")
@@ -556,11 +554,11 @@ class NFLBoard(BoardBase):
         layout = self.get_board_layout('nfl_team_summary')
 
         if not layout:
-            debug.info("NFL Board: No team summary layout found, using fallback")
+            debug.warning("NFL Board: No team summary layout found, using fallback")
             self._render_fallback_team_summary(team)
             return
 
-        debug.info("NFL Board: Using team summary layout")
+        debug.log("NFL Board: Using team summary layout")
 
         # Get team's schedule data for next/last game info
         snapshot = getattr(self.data, "nfl_board_snapshot", None)
@@ -591,10 +589,10 @@ class NFLBoard(BoardBase):
         if hasattr(layout, 'record'):
             # Use record_text property which has safe fallbacks
             #record_display = team.record_summary if team.record_summary else team.record_text
-            debug.info(f"NFL Board: Rendering record: {team.record_text}")
+            debug.log(f"NFL Board: Rendering record: {team.record_text}")
             self._draw_text(layout, "record", team.record_text)
         if hasattr(layout, 'record_comment') and team.record_comment:
-            debug.info(f"NFL Board: Rendering record comment: {team.record_comment}")
+            debug.log(f"NFL Board: Rendering record comment: {team.record_comment}")
             self._draw_text(layout, "record_comment", team.record_comment)
 
         # Render next game information
