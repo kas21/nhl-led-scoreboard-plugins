@@ -1,31 +1,30 @@
-"""Utility classes and helpers for the NFL board."""
-from __future__ import annotations
-
-from dataclasses import dataclass
-from datetime import datetime, timedelta
-from io import BytesIO
-from pathlib import Path
-from typing import Iterable, Optional
+"""
+NFL Board Data Management - Clean Implementation
+Handles API calls and data processing using APScheduler for background refresh.
+"""
 
 import debug
 import requests
-from PIL import Image
+from datetime import datetime, timedelta, time
+from dataclasses import dataclass
+from typing import List, Optional, Dict, Any
+from pathlib import Path
 
 
-def _parse_datetime(value: Optional[str]) -> Optional[datetime]:
-    """Parse ESPN ISO timestamps (that typically end with ``Z``)."""
+def parse_espn_datetime(value: Optional[str]) -> Optional[datetime]:
+    """Parse ESPN datetime strings which typically end with Z."""
     if not value:
         return None
     try:
-        # ESPN dates are UTC with "Z". ``fromisoformat`` needs ``+00:00``.
+        # ESPN dates are UTC with "Z", convert to format that works with fromisoformat
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
-        debug.error(f"NFL board: could not parse date value '{value}'")
-    return None
+        debug.error(f"NFL Board: Could not parse datetime '{value}'")
+        return None
 
 
-def _safe_int(value: Optional[str]) -> Optional[int]:
-    """Convert ESPN score strings to integers."""
+def safe_int_conversion(value: Optional[str]) -> Optional[int]:
+    """Safely convert ESPN score strings to integers."""
     if value in (None, ""):
         return None
     try:
@@ -34,521 +33,555 @@ def _safe_int(value: Optional[str]) -> Optional[int]:
         return None
 
 
-def _pick_logo_url(logos: Optional[Iterable[dict]]) -> Optional[str]:
-    """Return the best looking logo URL available."""
-    if not logos:
-        return None
+def safe_get_score_value(score_data) -> int:
+    """Safely extract score value from various ESPN API formats."""
+    if not score_data:
+        return 0
 
-    chosen = None
-    for logo in logos:
-        rel = logo.get("rel") or []
-        if "scoreboard" in rel:
-            return logo.get("href")
-        if chosen is None:
-            chosen = logo.get("href")
-    return chosen
+    # Handle string format (direct score value)
+    if isinstance(score_data, str):
+        return safe_int_conversion(score_data) or 0
 
+    # Handle dict format ({"value": "14"})
+    if isinstance(score_data, dict) and "value" in score_data:
+        return safe_int_conversion(score_data.get("value")) or 0
 
-def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
-    # Strip leading '#' if present
-    hex_color = hex_color.lstrip('#')
-    # Split into pairs and convert each to int
-    return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+    return 0
 
 
 @dataclass
 class NFLTeam:
-    """Structured representation of an NFL franchise."""
-
-    id: str
-    display_name: str
-    abbreviation: str
-    location: str
+    """Represents an NFL team with all relevant information."""
+    team_id: str
     name: str
-    color_primary: str
-    color_secondary: str
-    record_summary: str
-    record_comment: Optional[str]
+    abbreviation: str
+    display_name: str
+    location: str
+    color_primary: tuple  # RGB tuple like (255, 255, 255)
+    color_secondary: tuple  # RGB tuple like (0, 0, 0)
     logo_url: Optional[str] = None
-    logo_path: Optional[Path] = None
+    record_wins: int = 0
+    record_losses: int = 0
+    record_ties: int = 0
+    record_summary: str = ""
+    record_comment: Optional[str] = "---"
 
     @property
-    def logo_filename(self) -> str:
-        return f"{self.abbreviation.lower()}.png"
+    def has_detailed_record(self) -> bool:
+        """Check if this team has detailed record information loaded."""
+        return bool(self.record_summary or self.record_wins > 0 or self.record_losses > 0)
+
+    @property
+    def record_text(self) -> str:
+        """Format team record for display with safe fallback."""
+        # Use detailed record if available
+        if self.record_summary:
+            return self.record_summary
+
+        # Fallback to basic wins/losses if we have that data
+        if self.has_detailed_record:
+            if self.record_ties > 0:
+                return f"{self.record_wins}-{self.record_losses}-{self.record_ties}"
+            return f"{self.record_wins}-{self.record_losses}"
+
+        # No record data available
+        return "---"
 
 
 @dataclass
 class NFLGame:
-    """Game information with home and away team objects."""
-
-    event_id: str
+    """Represents an NFL game with complete information."""
+    game_id: str
     date: Optional[datetime]
     home_team: NFLTeam
     away_team: NFLTeam
-    status_state: str
-    status_detail: str
-    is_completed: bool
-    is_live: bool
-    home_score: Optional[int]
-    away_score: Optional[int]
-    venue: Optional[str] = None
+    home_score: int = 0
+    away_score: int = 0
+    status_state: str = "pre"
+    status_detail: str = "Scheduled"
     quarter: Optional[str] = None
     time_remaining: Optional[str] = None
-    possession_team_id: Optional[str] = None
+    is_final: bool = False
+    is_live: bool = False
+    venue: Optional[str] = None
 
-    def result_token(self, team_id: str) -> Optional[str]:
-        """Return ``W``/``L``/``T`` for the specified team once the contest is final."""
-        if not self.is_completed or self.home_score is None or self.away_score is None:
-            return None
+    def involves_team(self, team_id: str) -> bool:
+        """Check if this game involves the specified team."""
+        return self.home_team.team_id == team_id or self.away_team.team_id == team_id
 
-        if self.home_team.id == team_id:
-            our_score = self.home_score
-            opponent_score = self.away_score
-        elif self.away_team.id == team_id:
-            our_score = self.away_score
-            opponent_score = self.home_score
-        else:
-            return None
-
-        if our_score > opponent_score:
-            return "W"
-        if our_score < opponent_score:
-            return "L"
-        return "T"
-
-    def get_opponent(self, team_id: str) -> Optional[NFLTeam]:
-        """Get the opponent team for the specified team."""
-        if self.home_team.id == team_id:
+    def get_opposing_team(self, team_id: str) -> Optional[NFLTeam]:
+        """Get the opposing team for the specified team ID."""
+        if self.home_team.team_id == team_id:
             return self.away_team
-        elif self.away_team.id == team_id:
+        elif self.away_team.team_id == team_id:
             return self.home_team
         return None
 
-    def is_home_team(self, team_id: str) -> bool:
-        """Check if the specified team is playing at home."""
-        return self.home_team.id == team_id
-
-    def get_team_score(self, team_id: str) -> Optional[int]:
-        """Get the score for the specified team."""
-        if self.home_team.id == team_id:
-            return self.home_score
-        elif self.away_team.id == team_id:
-            return self.away_score
-        return None
-
-    def get_opponent_score(self, team_id: str) -> Optional[int]:
-        """Get the opponent's score for the specified team."""
-        if self.home_team.id == team_id:
-            return self.away_score
-        elif self.away_team.id == team_id:
-            return self.home_score
-        return None
-
-    def has_possession(self, team_id: str) -> bool:
-        """Check if the specified team has possession."""
-        return self.possession_team_id == team_id
-
-    def get_possession_team(self) -> Optional[NFLTeam]:
-        """Get the team that currently has possession."""
-        if self.possession_team_id == self.home_team.id:
+    @property
+    def winning_team(self) -> Optional[NFLTeam]:
+        """Get the team that is currently winning."""
+        if self.home_score > self.away_score:
             return self.home_team
-        elif self.possession_team_id == self.away_team.id:
+        elif self.away_score > self.home_score:
             return self.away_team
         return None
 
 
 class NFLApiClient:
-    """Pure data layer for ESPN NFL API - no business logic, just data fetching and parsing."""
+    """
+    Handles all NFL API communication with ESPN endpoints.
+    Provides clean methods for different data needs.
+    """
 
-    BASE_URL = "https://site.api.espn.com/apis/site/v2/sports/football/nfl"
+    def __init__(self, logo_cache_directory: Optional[Path] = None):
+        self.base_url = "https://site.api.espn.com/apis/site/v2/sports/football/nfl"
+        self.logo_cache_directory = logo_cache_directory
+        self.teams_cache: Dict[str, NFLTeam] = {}
+        self.last_teams_fetch: Optional[datetime] = None
 
-    def __init__(self, logo_dir: Path, session: Optional[requests.Session] = None):
-        self.session = session or requests.Session()
-        self.logo_dir = logo_dir
-        self.logo_dir.mkdir(parents=True, exist_ok=True)
+    def get_scoreboard_for_date(self, date: datetime) -> List[NFLGame]:
+        """
+        Get all games for a specific date using ESPN scoreboard endpoint.
+        Date format: YYYYMMDD
+        """
+        date_string = date.strftime("%Y%m%d")
+        url = f"{self.base_url}/scoreboard?dates={date_string}"
 
-    # ---------------------------------------------------------------------
-    # Public API - Simple data access methods
+        debug.info(f"NFL Board: Fetching scoreboard for {date_string}")
 
-    def get_teams(self) -> list[NFLTeam]:
-        """Get all NFL teams."""
-        all_teams_json = self._get_json("teams")
-        teams_lookup = self._build_teams_lookup(all_teams_json)
-        return list(teams_lookup.values())
-
-    def get_team(self, team_id: str) -> NFLTeam:
-        """Get detailed information for a specific team."""
-        team_json = self._get_json(f"teams/{team_id}")
-        team = self._parse_team(team_json)
-
-        # Ensure team logo
-        if team.logo_url:
-            team.logo_path = self._ensure_logo(team.abbreviation, team.logo_url)
-
-        return team
-
-    def get_team_schedule(self, team_id: str) -> list[NFLGame]:
-        """Get full schedule for a specific team."""
-        schedule_json = self._get_json(f"teams/{team_id}/schedule")
-        all_teams_json = self._get_json("teams")
-        teams_lookup = self._build_teams_lookup(all_teams_json)
-
-        all_games = self._parse_all_games(schedule_json, teams_lookup)
-        team_games = self._filter_team_games(all_games, team_id)
-
-        # Ensure logos for all games
-        for game in team_games:
-            if game.home_team.logo_url and not game.home_team.logo_path:
-                game.home_team.logo_path = self._ensure_logo(game.home_team.abbreviation, game.home_team.logo_url)
-            if game.away_team.logo_url and not game.away_team.logo_path:
-                game.away_team.logo_path = self._ensure_logo(game.away_team.abbreviation, game.away_team.logo_url)
-
-        return team_games
-
-    def get_scoreboard(self, date: str = None) -> list[NFLGame]:
-        """Get games from scoreboard (current week if no date specified)."""
-        url = "scoreboard"
-        if date:
-            url = f"scoreboard?dates={date}"
-
-        scoreboard_json = self._get_json(url)
-        all_teams_json = self._get_json("teams")
-        teams_lookup = self._build_teams_lookup(all_teams_json)
-
-        games = self._parse_all_games(scoreboard_json, teams_lookup)
-
-        # Ensure logos for all games
-        for game in games:
-            if game.home_team.logo_url and not game.home_team.logo_path:
-                game.home_team.logo_path = self._ensure_logo(game.home_team.abbreviation, game.home_team.logo_url)
-            if game.away_team.logo_url and not game.away_team.logo_path:
-                game.away_team.logo_path = self._ensure_logo(game.away_team.abbreviation, game.away_team.logo_url)
-
-        return games
-
-    def get_live_scores(self, game_ids: list[str]) -> dict[str, NFLGame]:
-        """Get updated scores for live games."""
-        scoreboard_json = self._get_json("scoreboard")
-        all_teams_json = self._get_json("teams")
-        teams_lookup = self._build_teams_lookup(all_teams_json)
-
-        current_games = self._parse_all_games(scoreboard_json, teams_lookup)
-        live_scores = {}
-
-        for game in current_games:
-            if game.event_id in game_ids and game.is_live:
-                # Update with latest live data
-                updated_game = self.update_live_game_scores(game)
-                live_scores[game.event_id] = updated_game
-
-        return live_scores
-
-
-    def update_live_game_scores(self, live_game: NFLGame) -> NFLGame:
-        """Update live game with current scores from scoreboard API."""
         try:
-            scoreboard_json = self._get_json("scoreboard")
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            data = response.json()
 
-            # Find matching game by event_id
-            for game in scoreboard_json.get("events", []):
-                if str(game.get("id")) == live_game.event_id:
-                    # Update scores and status from live data
-                    competitions = game.get("competitions", [])
-                    if competitions:
-                        competition = competitions[0]
-                        competitors = competition.get("competitors", [])
+            games = []
+            events = data.get("events", [])
 
-                        for comp in competitors:
-                            if comp.get("homeAway") == "home":
-                                live_game.home_score = _safe_int(comp.get("score", None))
-                            else:
-                                live_game.away_score = _safe_int(comp.get("score", None))
+            for event in events:
+                game = self._parse_game_from_event(event)
+                if game:
+                    games.append(game)
 
-                        # Update status information
-                        status = competition.get("status", {}).get("type", {})
-                        live_game.status_state = status.get("state", live_game.status_state)
-                        live_game.status_detail = competition.get("detail") or status.get("shortDetail") or live_game.status_detail
-                        live_game.is_completed = bool(status.get("completed"))
-                        live_game.is_live = (live_game.status_state == "in")
-
-                        # Update quarter, time, and possession for live games
-                        if live_game.is_live:
-                            # Get quarter and time from status
-                            quarter = status.get("period")
-                            if quarter:
-                                live_game.quarter = str(quarter)
-
-                            # Get clock time
-                            clock = status.get("clock")
-                            if clock:
-                                live_game.time_remaining = str(clock)
-
-                            # Get possession information if available
-                            situation = competition.get("situation")
-                            if situation:
-                                possession_info = situation.get("possession")
-                                if possession_info:
-                                    live_game.possession_team_id = str(possession_info)
-                    break
+            debug.info(f"NFL Board: Found {len(games)} games for {date_string}")
+            return games
 
         except Exception as exc:
-            debug.error(f"NFL board: failed to update live game scores - {exc}")
+            debug.error(f"NFL Board: Failed to fetch scoreboard for {date_string}: {exc}")
+            return []
 
-        return live_game
+    def get_current_scoreboard(self) -> List[NFLGame]:
+        """Get current/today's games."""
+        return self.get_scoreboard_for_date(datetime.now())
 
-    # ------------------------------------------------------------------
-    # Internal helpers
+    def get_all_teams(self) -> Dict[str, NFLTeam]:
+        """
+        Get basic NFL teams information (no detailed records).
+        Use get_team_details() to populate full details for specific teams.
+        """
+        # Use cached data if less than 1 hour old
+        if (self.teams_cache and self.last_teams_fetch and
+            datetime.now() - self.last_teams_fetch < timedelta(hours=1)):
+            return self.teams_cache
 
-    def _get_json(self, path: str) -> dict:
-        url = f"{self.BASE_URL}/{path.lstrip('/')}"
-        debug.log(f"NFL board: fetching {url}")
-        response = self.session.get(url, timeout=10)
-        response.raise_for_status()
-        return response.json()
-
-    def _ensure_logo(self, abbreviation: str, url: str) -> Optional[Path]:
-        """Download and cache the team logo as a 64px PNG."""
         try:
-            destination = self.logo_dir / f"{abbreviation.lower()}.png"
-            if destination.exists():
-                return destination
+            url = f"{self.base_url}/teams"
+            debug.info(f"NFL Board: Fetching basic teams data")
 
-            debug.info(f"NFL board: caching logo for {abbreviation} from {url}")
-            response = self.session.get(url, timeout=10)
+            response = requests.get(url, timeout=10)
             response.raise_for_status()
+            data = response.json()
 
-            image = Image.open(BytesIO(response.content)).convert("RGBA")
-            # Trim Transparency
-            bbox = image.getbbox()
-            image = image.crop(bbox)
-            # Keep aspect ratio but ensure the longest edge is 64px.
-            resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS", None)
-            if resampling is None:
-                resampling = getattr(Image, "LANCZOS", getattr(Image, "ANTIALIAS", Image.BICUBIC))
-            image.thumbnail((64, 64), resampling)
-            image.save(destination, format="PNG")
-            return destination
-        except Exception as exc:  # pragma: no cover - defensive logging
-            debug.error(f"NFL board: failed to cache logo {url}: {exc}")
-        return None
+            teams = {}
+            sports = data.get("sports", [])
+            if sports:
+                leagues = sports[0].get("leagues", [])
+                if leagues:
+                    team_list = leagues[0].get("teams", [])
 
-    def _parse_team(self, payload: dict) -> NFLTeam:
-        team_info = payload.get("team", {})
-        record_summary = ""
-        record_comment = team_info.get("standingSummary")
+                    for team_item in team_list:
+                        team_data = team_item.get("team", {})
+                        team = self._parse_basic_team_data(team_data)
+                        if team:
+                            teams[team.team_id] = team
 
-        record = team_info.get("record", {})
-        for item in record.get("items", []):
-            summary = item.get("summary")
-            if summary:
-                record_summary = summary
-                break
+            self.teams_cache = teams
+            self.last_teams_fetch = datetime.now()
 
-        logos = team_info.get("logos") or []
-        logo_url = _pick_logo_url(logos)
+            debug.info(f"NFL Board: Cached {len(teams)} basic teams")
+            return teams
 
-        color_primary=team_info.get("color") or ""
-        color_secondary=team_info.get("alternateColor") or ""
+        except Exception as exc:
+            debug.error(f"NFL Board: Failed to fetch teams: {exc}")
+            return self.teams_cache
 
-        color_primary = _hex_to_rgb(color_primary)
-        color_secondary = _hex_to_rgb(color_secondary)
+    def get_team_schedule(self, team_id: str) -> List[NFLGame]:
+        """
+        Get schedule for a specific team.
+        Returns recent and upcoming games.
+        """
+        try:
+            url = f"{self.base_url}/teams/{team_id}/schedule"
+            debug.info(f"NFL Board: Fetching schedule for team {team_id}")
+
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+
+            games = []
+            events = data.get("events", [])
+
+            for event in events:
+                game = self._parse_game_from_event(event)
+                if game:
+                    games.append(game)
+
+            debug.info(f"NFL Board: Found {len(games)} scheduled games for team {team_id}")
+            return games
+
+        except Exception as exc:
+            debug.error(f"NFL Board: Failed to fetch schedule for team {team_id}: {exc}")
+            return []
+
+    def _parse_basic_team_data(self, team_data: Dict[str, Any]) -> Optional[NFLTeam]:
+        """Parse basic team information from ESPN /teams endpoint (no detailed records)."""
+        try:
+            team_id = team_data.get("id")
+            if not team_id:
+                return None
+
+            # Extract logo URL
+            logo_url = None
+            logos = team_data.get("logos", [])
+            if logos:
+                logo_url = logos[0].get("href")
+
+            # Convert colors to RGB tuples
+            color_primary = self._hex_to_rgb(team_data.get("color", "000000"))
+            color_secondary = self._hex_to_rgb(team_data.get("alternateColor", "FFFFFF"))
+
+            return NFLTeam(
+                team_id=team_id,
+                name=team_data.get("name", ""),
+                abbreviation=team_data.get("abbreviation", ""),
+                display_name=team_data.get("displayName", ""),
+                location=team_data.get("location", ""),
+                color_primary=color_primary,
+                color_secondary=color_secondary,
+                logo_url=logo_url,
+                # Note: No detailed record data - use get_team_details() to populate
+                record_wins=0,
+                record_losses=0,
+                record_ties=0,
+                record_summary="",
+                record_comment="---"
+            )
+
+        except Exception as exc:
+            debug.error(f"NFL Board: Failed to parse basic team data: {exc}")
+            return None
+
+    def _parse_team_data(self, team_data: Dict[str, Any]) -> Optional[NFLTeam]:
+        """Parse team information from ESPN API response."""
+        try:
+            team_id = team_data.get("id")
+            if not team_id:
+                return None
+
+            # Extract logo URL
+            logo_url = None
+            logos = team_data.get("logos", [])
+            if logos:
+                logo_url = logos[0].get("href")
+
+            # Extract team record
+            wins = losses = ties = 0
+            record_summary = ""
+            # The record object has a list of record types
+            # The first item in the list should be the TOTAL record 
+            record_items = team_data.get("record", {}).get("items", [])
+            #debug.info(record_items)
+            if record_items:
+                # Get the summary from first record item
+                summary = record_items[0].get("summary")
+                if summary:
+                    record_summary = summary
+
+                # Also extract individual stats for our internal tracking
+                stats = record_items[0].get("stats", [])
+                for stat in stats:
+                    stat_name = stat.get("name")
+                    if stat_name == "wins":
+                        wins = int(stat.get("value", 0))
+                    elif stat_name == "losses":
+                        losses = int(stat.get("value", 0))
+                    elif stat_name == "ties":
+                        ties = int(stat.get("value", 0))
+                #debug.info(f"RECORD!!! {wins}-{losses}-{ties}")
+
+            # Extract standing summary for record_comment
+            record_comment = team_data.get("standingSummary")
+
+            # Convert colors to RGB tuples (old implementation expected tuples)
+            color_primary = self._hex_to_rgb(team_data.get("color", "000000"))
+            color_secondary = self._hex_to_rgb(team_data.get("alternateColor", "FFFFFF"))
+
+            return NFLTeam(
+                team_id=team_id,
+                name=team_data.get("name", ""),
+                abbreviation=team_data.get("abbreviation", ""),
+                display_name=team_data.get("displayName", ""),
+                location=team_data.get("location", ""),
+                color_primary=color_primary,
+                color_secondary=color_secondary,
+                logo_url=logo_url,
+                record_wins=wins,
+                record_losses=losses,
+                record_ties=ties,
+                record_summary=record_summary,
+                record_comment=record_comment
+            )
+
+        except Exception as exc:
+            debug.error(f"NFL Board: Failed to parse team data: {exc}")
+            return None
+
+    def _parse_game_from_event(self, event_data: Dict[str, Any]) -> Optional[NFLGame]:
+        """Parse game information from ESPN event data."""
+        try:
+            game_id = event_data.get("id", "")
+
+            # Parse game date
+            game_date = parse_espn_datetime(event_data.get("date"))
+
+            # Parse competitions (should be one for NFL)
+            competitions = event_data.get("competitions", [])
+            if not competitions:
+                return None
+
+            competition = competitions[0]
+            competitors = competition.get("competitors", [])
+
+            if len(competitors) < 2:
+                return None
+
+            # Find home and away teams
+            home_competitor = None
+            away_competitor = None
+
+            for competitor in competitors:
+                if competitor.get("homeAway") == "home":
+                    home_competitor = competitor
+                elif competitor.get("homeAway") == "away":
+                    away_competitor = competitor
+
+            if not home_competitor or not away_competitor:
+                return None
+
+            # Parse team data from competitors
+            home_team = self._parse_competitor_team(home_competitor)
+            away_team = self._parse_competitor_team(away_competitor)
+
+            if not home_team or not away_team:
+                return None
+
+            # Parse scores safely (handles both string and dict formats)
+            home_score_data = home_competitor.get("score")
+            away_score_data = away_competitor.get("score")
+
+            home_score = safe_get_score_value(home_score_data)
+            away_score = safe_get_score_value(away_score_data)
+
+            # Parse game status
+            status = competition.get("status", {})
+            status_type = status.get("type", {})
+            status_state = status_type.get("state", "pre")
+            status_detail = status_type.get("shortDetail", "Scheduled")
+
+            is_final = status_type.get("completed", False)
+            is_live = status_state == "in"
+
+            # Parse live game details
+            quarter = None
+            time_remaining = None
+            if is_live:
+                quarter = str(status.get("period", ""))
+                time_remaining = status.get("displayClock")
+
+            # Parse venue
+            venue = None
+            venue_data = competition.get("venue")
+            if venue_data:
+                venue = venue_data.get("fullName")
+
+            return NFLGame(
+                game_id=game_id,
+                date=game_date,
+                home_team=home_team,
+                away_team=away_team,
+                home_score=home_score,
+                away_score=away_score,
+                status_state=status_state,
+                status_detail=status_detail,
+                quarter=quarter,
+                time_remaining=time_remaining,
+                is_final=is_final,
+                is_live=is_live,
+                venue=venue
+            )
+
+        except Exception as exc:
+            debug.error(f"NFL Board: Failed to parse game data: {exc}")
+            import traceback
+            debug.error(traceback.print_exc())
+            return None
+
+    def _parse_competitor_team(self, competitor: Dict[str, Any]) -> Optional[NFLTeam]:
+        """Parse team data from competitor information."""
+        team_data = competitor.get("team", {})
+        team_id = team_data.get("id")
+
+        if not team_id:
+            return None
+
+        # Check if we have this team in cache
+        if team_id in self.teams_cache:
+            return self.teams_cache[team_id]
+
+        # Create basic team info from competitor data
+        logo_url = None
+        logos = team_data.get("logos", [])
+        if logos:
+            logo_url = logos[0].get("href")
 
         return NFLTeam(
-            id=str(team_info.get("id")),
-            display_name=team_info.get("displayName") or team_info.get("name") or "",
-            abbreviation=team_info.get("abbreviation") or "",
-            location=team_info.get("location") or "",
-            name=team_info.get("name") or "",
-            color_primary=color_primary,
-            color_secondary=color_secondary,
-            record_summary=record_summary,
-            record_comment=record_comment,
-            logo_url=logo_url,
+            team_id=team_id,
+            name=team_data.get("name", ""),
+            abbreviation=team_data.get("abbreviation", ""),
+            display_name=team_data.get("displayName", ""),
+            location=team_data.get("location", ""),
+            color_primary=(255, 255, 255),  # Default white for competitor data
+            color_secondary=(0, 0, 0),      # Default black for competitor data
+            logo_url=logo_url
         )
 
-    def _build_teams_lookup(self, payload: dict) -> dict[str, NFLTeam]:
-        """Build a lookup dictionary of all NFL teams."""
-        teams_lookup = {}
-        if "sports" in payload:
-            teams = payload["sports"][0]["leagues"][0]["teams"]
-            for team_data in teams:
-                team = self._parse_team_from_teams_endpoint(team_data["team"])
-                teams_lookup[team.id] = team
-        return teams_lookup
+    def get_team_details(self, team_id: str) -> bool:
+        """
+        Fetch detailed team information and update the cached team.
+        Returns True if successful, False otherwise.
+        """
+        try:
+            url = f"{self.base_url}/teams/{team_id}"
+            debug.log(f"NFL Board: Fetching detailed data for team {team_id}")
 
-    def _parse_all_games(self, payload: dict, teams_lookup: dict[str, NFLTeam]) -> list[NFLGame]:
-        """Parse all games from schedule or scoreboard data, regardless of team."""
-        events = payload.get("events", [])
-        games: list[NFLGame] = []
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            data = response.json()
 
-        for event in events:
-            game = self._parse_game_data(event, teams_lookup)
-            if game:
-                games.append(game)
-        return games
-
-
-    def _parse_team_from_teams_endpoint(self, team_info: dict) -> NFLTeam:
-        """Parse team data from the teams endpoint (different structure than team-specific endpoint)."""
-        record_summary = ""
-        record_comment = team_info.get("standingSummary")
-
-        record = team_info.get("record", {})
-        for item in record.get("items", []):
-            summary = item.get("summary")
-            if summary:
-                record_summary = summary
-                break
-
-        logos = team_info.get("logos") or []
-        logo_url = _pick_logo_url(logos)
-
-        color_primary = team_info.get("color") or ""
-        color_secondary = team_info.get("alternateColor") or ""
-
-        if color_primary:
-            color_primary = _hex_to_rgb(color_primary)
-        if color_secondary:
-            color_secondary = _hex_to_rgb(color_secondary)
-
-        return NFLTeam(
-            id=str(team_info.get("id")),
-            display_name=team_info.get("displayName") or team_info.get("name") or "",
-            abbreviation=team_info.get("abbreviation") or "",
-            location=team_info.get("location") or "",
-            name=team_info.get("name") or "",
-            color_primary=color_primary,
-            color_secondary=color_secondary,
-            record_summary=record_summary,
-            record_comment=record_comment,
-            logo_url=logo_url,
-        )
-
-    def _parse_game_data(self, event: dict, teams_lookup: dict[str, NFLTeam]) -> Optional[NFLGame]:
-        """Parse game data for any game, regardless of team involvement."""
-        competitions = event.get("competitions", [])
-        competition = competitions[0] if competitions else {}
-
-        competitors = competition.get("competitors", [])
-        home_competitor = None
-        away_competitor = None
-
-        for comp in competitors:
-            if comp.get("homeAway") == "home":
-                home_competitor = comp
+            detailed_team = self._parse_team_data(data.get("team", {}))
+            if detailed_team and team_id in self.teams_cache:
+                # Update the cached team with detailed information
+                self.teams_cache[team_id] = detailed_team
+                debug.log(f"NFL Board: Updated team {team_id} with detailed record data")
+                return True
             else:
-                away_competitor = comp
+                debug.warning(f"NFL Board: Failed to get detailed data for team {team_id}")
+                return False
 
-        if home_competitor is None or away_competitor is None:
-            return None
+        except Exception as exc:
+            debug.error(f"NFL Board: Failed to fetch team details for {team_id}: {exc}")
+            return False
 
-        home_team_id = str(home_competitor.get("team", {}).get("id"))
-        away_team_id = str(away_competitor.get("team", {}).get("id"))
+    def populate_team_details(self, team_ids: List[str]) -> int:
+        """
+        Populate detailed information for specified teams.
+        Returns count of successfully updated teams.
+        """
+        success_count = 0
+        debug.info(f"NFL Board: Populating details for {len(team_ids)} teams")
 
-        # Get teams from lookup, fallback to parsing from competitor data
-        home_team = teams_lookup.get(home_team_id)
-        if not home_team:
-            home_team = self._parse_team_from_competitor(home_competitor)
+        for team_id in team_ids:
+            if self.get_team_details(team_id):
+                success_count += 1
 
-        away_team = teams_lookup.get(away_team_id)
-        if not away_team:
-            away_team = self._parse_team_from_competitor(away_competitor)
+        debug.info(f"NFL Board: Successfully populated details for {success_count}/{len(team_ids)} teams")
+        return success_count
 
-        if not home_team or not away_team:
-            return None
+    def _hex_to_rgb(self, hex_color: str) -> tuple:
+        """Convert hex color to RGB tuple."""
+        try:
+            # Strip leading '#' if present
+            hex_color = hex_color.lstrip('#')
+            # Convert to RGB tuple
+            return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+        except (ValueError, TypeError):
+            return (255, 255, 255)  # Default to white
 
-        status = competition.get("status", {}).get("type", {})
-        state = status.get("state", "")
-        detail = competition.get("detail") or status.get("shortDetail") or ""
 
-        # Extract quarter and time information
-        quarter = None
-        time_remaining = None
-        possession_team_id = None
+class NFLDataSnapshot:
+    """
+    Container for NFL data that gets stored on the scheduler refresh.
+    Organizes data for easy access by the board rendering logic.
+    """
 
-        if state == "in":  # Only extract live game details for in-progress games
-            # Get quarter and time from status
-            quarter = status.get("period")
-            if quarter:
-                quarter = str(quarter)
+    def __init__(self):
+        self.timestamp = datetime.now()
+        self.error_message: Optional[str] = None
 
-            # Get clock time
-            clock = status.get("clock")
-            if clock:
-                time_remaining = str(clock)
+        # Teams data
+        self.all_teams: Dict[str, NFLTeam] = {}
+        self.favorite_teams: Dict[str, NFLTeam] = {}
 
-            # Get possession information if available
-            situation = competition.get("situation", None)
-            if situation:
-                possession_info = situation.get("possession", None)
-                if possession_info:
-                    possession_team_id = str(possession_info or "")
+        # Games data organized by category
+        self.todays_games: List[NFLGame] = []
+        self.yesterdays_games: List[NFLGame] = []
+        self.favorite_team_games: List[NFLGame] = []
+        self.live_games: List[NFLGame] = []
 
-        return NFLGame(
-            event_id=str(event.get("id")),
-            date=_parse_datetime(event.get("date")),
-            home_team=home_team,
-            away_team=away_team,
-            status_state=state,
-            status_detail=detail,
-            is_completed=bool(status.get("completed")),
-            is_live=(state == "in"),
-            home_score=_safe_int(home_competitor.get("score", {})),
-            away_score=_safe_int(away_competitor.get("score", {})),
-            venue=self._extract_venue(competition),
-            quarter=quarter,
-            time_remaining=time_remaining,
-            possession_team_id=possession_team_id,
-        )
+        # Team schedules for favorite teams
+        self.team_schedules: Dict[str, List[NFLGame]] = {}
 
-    def _parse_team_from_competitor(self, competitor: dict) -> Optional[NFLTeam]:
-        """Parse team data from competitor data in schedule (fallback method)."""
-        team_info = competitor.get("team", {})
-        if not team_info:
-            return None
+    def add_error(self, error_message: str):
+        """Add an error message to the snapshot."""
+        self.error_message = error_message
+        debug.error(f"NFL Board snapshot error: {error_message}")
 
-        logos = team_info.get("logos") or []
-        logo_url = _pick_logo_url(logos)
+    def is_valid(self) -> bool:
+        """Check if this snapshot has valid data."""
+        return self.error_message is None and bool(self.all_teams)
 
-        color_primary = team_info.get("color") or ""
-        color_secondary = team_info.get("alternateColor") or ""
+    def get_games_for_display(self, favorite_team_ids: List[str],
+                              show_all_games: bool,
+                              cutoff_time: time) -> List[NFLGame]:
+        """
+        Get games that should be displayed based on configuration.
+        Implements the display logic for what games to show.
+        """
+        games_to_show = []
 
-        if color_primary:
-            color_primary = _hex_to_rgb(color_primary)
-        if color_secondary:
-            color_secondary = _hex_to_rgb(color_secondary)
+        # Always include live games involving favorite teams
+        for game in self.live_games:
+            if any(game.involves_team(team_id) for team_id in favorite_team_ids):
+                games_to_show.append(game)
 
-        return NFLTeam(
-            id=str(team_info.get("id")),
-            display_name=team_info.get("displayName") or team_info.get("name") or "",
-            abbreviation=team_info.get("abbreviation") or "",
-            location=team_info.get("location") or "",
-            name=team_info.get("name") or "",
-            color_primary=color_primary,
-            color_secondary=color_secondary,
-            record_summary="",  # Not available in competitor data
-            record_comment=None,
-            logo_url=logo_url,
-        )
+        # Include favorite team games
+        for game in self.favorite_team_games:
+            if game not in games_to_show:
+                games_to_show.append(game)
 
-    def _extract_venue(self, competition: dict) -> Optional[str]:
-        venue = competition.get("venue") or {}
-        if venue.get("fullName"):
-            return venue.get("fullName")
-        address = venue.get("address") or {}
-        if address.get("city") and address.get("state"):
-            return f"{address['city']}, {address['state']}"
-        if address.get("city"):
-            return address.get("city")
-        return None
+        # Include today's games if configured
+        if show_all_games:
+            for game in self.todays_games:
+                if game not in games_to_show:
+                    games_to_show.append(game)
 
-    # ------------------------------------------------------------------
-    # Core data access helpers (keep these - they're just basic filtering)
+        # Include yesterday's games if before cutoff time
+        current_time = datetime.now().time()
+        if current_time < cutoff_time:
+            for game in self.yesterdays_games:
+                if game not in games_to_show:
+                    games_to_show.append(game)
 
-    def _filter_team_games(self, games: list[NFLGame], team_id: str) -> list[NFLGame]:
-        """Basic filter: games where specified team participates."""
-        team_id = str(team_id)
-        return [
-            game for game in games
-            if game.home_team.id == team_id or game.away_team.id == team_id
-        ]
+        # Sort games: live first, then by date
+        games_to_show.sort(key=lambda g: (not g.is_live, g.date or datetime.min))
+
+        return games_to_show
