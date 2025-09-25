@@ -43,4 +43,4 @@ pip-delete-this-directory.txt
 config.json
 
 # Ignore Custom Holiday File
-custom_holiday.csv
+custom_holidays.csv
