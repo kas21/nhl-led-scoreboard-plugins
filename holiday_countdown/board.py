@@ -118,9 +118,10 @@ class HolidayCountdownBoard(BoardBase):
         # Get configuration values with defaults
         self.country_code = self.board_config.get("country_code", "US")
         self.subdiv = self.board_config.get("subdiv", "NY")
-        self.categories = self.board_config.get("catgegories", "")
+        self.categories = self.board_config.get("categories", "")
         self.ignored_holidays = self.board_config.get("ignored_holidays", "")
         self.horizon_days = self.board_config.get("horizon_days", 90)
+        self.display_seconds = self.board_config.get("display_seconds", 5)
 
         # Resolve paths relative to the plugin directory
         self.board_dir = self._get_board_directory()
@@ -163,6 +164,8 @@ class HolidayCountdownBoard(BoardBase):
     # -------- Rendering --------
 
     def render(self):
+        debug.info("Rendering Holiday Countdown Board")
+
         # Refresh date-dependent data if date has changed
         today = date.today()
         if self._last_computed_date != today:
@@ -176,8 +179,9 @@ class HolidayCountdownBoard(BoardBase):
         layout = self.get_board_layout("holiday_countdown")
 
         black_gradiant = Image.open(f'assets/images/{self.cols}x{self.rows}_scoreboard_center_gradient.png')
-
+        
         for dt, name in self.upcoming_holidays:
+
             if name in self.ignored_holidays:
                 continue
             debug.info(f"Rendering {name} board")
@@ -221,7 +225,7 @@ class HolidayCountdownBoard(BoardBase):
             self.matrix.draw_text_layout(layout.holiday_name_text, name.upper(), fillColor=fg_rgb)
 
             self.matrix.render()
-            self.sleepEvent.wait(7)
+            self.sleepEvent.wait(self.display_seconds)
 
     # -------- Data building --------
 
@@ -257,12 +261,14 @@ class HolidayCountdownBoard(BoardBase):
         # Not sure how to handle this better but I don't love this approach
         kwargs = {}
         if self.categories:   # will be False if [], "", or None
+            # Create a new list with all elements in lowercase
+            categories = [item.lower() for item in self.categories]
             kwargs["categories"] = []
-            if "government".lower() in self.categories:
+            if "government".lower() in categories:
                 kwargs["categories"].append(GOVERNMENT)
-            if "unofficial".lower() in self.categories:
+            if "unofficial".lower() in categories:
                 kwargs["categories"].append(UNOFFICIAL)
-            if "public".lower() in self.categories:
+            if "public".lower() in categories:
                 kwargs["categories"].append(PUBLIC)
 
         hdays = country_holidays(

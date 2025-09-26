@@ -5,7 +5,7 @@
     },
     "nfl_team_summary": {
         "team_logo": {
-            "position": ["48%", 15],
+            "position": ["48%", 1],
             "align": "left-top"
         },
         "team_name": {
@@ -75,39 +75,9 @@
             }, 
             "align": "left-top",
             "font": "small"
-        },
-        "primary_label": {
-            "position": [0, 35],
-            "align": "left-top",
-            "font": "small"
-        },
-        "primary_line1": {
-            "position": [0, 46],
-            "align": "left-top",
-            "font": "default_medium"
-        },
-        "primary_line2": {
-            "position": [0, 57],
-            "align": "left-top",
-            "font": "small"
-        },
-        "secondary_label": {
-            "position": [64, 35],
-            "align": "left-top",
-            "font": "small"
-        },
-        "secondary_line1": {
-            "position": [64, 46],
-            "align": "left-top",
-            "font": "default_medium"
-        },
-        "secondary_line2": {
-            "position": [64, 57],
-            "align": "left-top",
-            "font": "small"
         }
     },
-    "nfl_live_game": {
+    "nfl_game": {
         "away_team_logo": {
             "position":[0, "50%"],
             "align": "left-center"

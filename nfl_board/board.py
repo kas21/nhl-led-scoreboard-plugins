@@ -1,455 +1,720 @@
-"""NFL team information board."""
-from __future__ import annotations
-
-import datetime
-import inspect
-from pathlib import Path
-from typing import Optional
-import threading
+"""
+NFL Board - Clean Implementation
+Displays NFL games and team information using clear, readable logic.
+"""
 
 import debug
-from PIL import Image
 import json
+from datetime import datetime, time, timedelta, timezone
+from typing import List, Optional, Dict
+from pathlib import Path
 from utils import get_file
 
+
+from PIL import Image
 from boards.base_board import BoardBase
 
 from . import __board_name__, __description__, __version__
-from .data import NFLApiClient, NFLGame, NFLTeam
-from renderer.matrix import Matrix
+from .data import NFLApiClient, NFLDataSnapshot, NFLGame, NFLTeam
+
+
+class NFLBoardConfig:
+    """
+    Handles NFL board configuration with validation and sensible defaults.
+    Makes configuration logic clear and separate from rendering logic.
+    """
+
+    def __init__(self, config_data: dict):
+        # Team configuration - must have at least one team
+        self.team_ids = self._parse_team_ids(config_data.get("team_ids", []))
+        if not self.team_ids:
+            raise ValueError("NFL Board requires at least one team_id in configuration")
+
+        # Display timing settings
+        self.display_seconds = int(config_data.get("display_seconds", 8))
+        self.refresh_seconds = int(config_data.get("refresh_seconds", 300))
+
+        # Game display configuration
+        self.show_all_games = bool(config_data.get("show_all_games", False))
+        self.show_previous_games_until_time = self._parse_cutoff_time(
+            config_data.get("show_previous_games_until", "06:00")
+        )
+
+        debug.info(f"NFL Board: Configured for teams {self.team_ids}")
+        debug.info(f"NFL Board: Show all games = {self.show_all_games}")
+        debug.info(f"NFL Board: Previous games cutoff = {self.show_previous_games_until_time}")
+
+    def _parse_team_ids(self, team_ids_config) -> List[str]:
+        """Parse team IDs from configuration, handling single string or list."""
+        if isinstance(team_ids_config, str):
+            team_ids_config = [team_ids_config]
+
+        if not isinstance(team_ids_config, list):
+            return []
+
+        # Convert all to strings and filter out empty ones
+        parsed_ids = [str(tid).strip() for tid in team_ids_config if str(tid).strip()]
+        return parsed_ids
+
+    def _parse_cutoff_time(self, time_string: str) -> time:
+        """Parse cutoff time string into time object."""
+        try:
+            hour, minute = map(int, time_string.split(":"))
+            return time(hour, minute)
+        except (ValueError, AttributeError):
+            debug.warning(f"NFL Board: Invalid cutoff time '{time_string}', using 06:00")
+            return time(6, 0)
+
+    def should_show_previous_game(self, game: NFLGame) -> bool:
+        """
+        Determine if a previous day's game should still be shown.
+        Games from yesterday are shown until the configured cutoff time.
+        """
+        if not game.is_final:
+            return True
+
+        now = datetime.now()
+        if not game.date:
+            return False
+
+        game_date = game.date.date()
+        today = now.date()
+
+        # Show games from today or future
+        if game_date >= today:
+            return True
+
+        # Show games from yesterday if we're before the cutoff time
+        if game_date == today - timedelta(days=1):
+            return now.time() < self.show_previous_games_until_time
+
+        # Don't show games older than yesterday
+        return False
 
 
 class NFLBoard(BoardBase):
-    """Display upcoming and recent game information for an NFL franchise."""
+    """
+    NFL Board implementation following BoardBase pattern.
+    Displays NFL games with clean separation between data fetching and rendering.
+    """
 
-    def __init__(self, data, matrix: Matrix, sleepEvent):
+    def __init__(self, data, matrix, sleepEvent):
         super().__init__(data, matrix, sleepEvent)
 
+        # Board metadata
         self.board_name = __board_name__
         self.board_version = __version__
         self.board_description = __description__
 
-        # Read basic settings
-        self.display_seconds = int(self.board_config.get("display_seconds", 8))
-        self.refresh_seconds = int(self.board_config.get("refresh_seconds", 300))
-        self.show_todays_games = bool(self.board_config.get("show_todays_games", False))
-        self.show_previous_games_until = self.board_config.get("show_previous_games_until", "06:00")
-        self.team_ids = self.board_config.get("team_ids", [])
+        # Initialize configuration with validation
+        try:
+            self.config = NFLBoardConfig(self.board_config)
+        except ValueError as error:
+            debug.error(f"NFL Board configuration error: {error}")
+            raise
 
-        self.team: Optional[NFLTeam] = None
-        self.next_game: Optional[NFLGame] = None
-        self.last_game: Optional[NFLGame] = None
-        self.live_game: Optional[NFLGame] = None
-        self._team_logo_cache: dict[tuple[Path, int], Image.Image] = {}
+        # Initialize API client
+        logo_cache_dir = self._get_board_directory() / "logos" if hasattr(self, '_get_board_directory') else None
+        self.api_client = NFLApiClient(logo_cache_dir)
 
-        self.last_refresh = datetime.datetime.min.replace(tzinfo=datetime.timezone.utc)
-        self.error_message: Optional[str] = None
+        # Display state management - unified approach
+        self.current_display_items = []  # Unified list of games and team summaries
 
-        self._lock = threading.RLock()
-        self._snapshot = None
-        self._scheduled_job_id = "nfl_board_refresh"
+        # Logo caching for performance
+        self.logo_cache: Dict[str, Image.Image] = {}
 
+        # Load logo positioning offsets if they exist
+        self.logo_offsets = self._load_logo_offsets()
 
-        # Validate that we have at least one team_id
-        if not self.team_ids:
-            debug.error("NFL board: team_id (single or list) is required in config.json")
-            return
+        # Gradient used for board
+        self.gradient = self._load_gradient()
 
-        debug.info(f"NFL board: configured for {len(self.team_ids)} favorite teams: {self.team_ids}")
+        # Set up scheduled data refresh using APScheduler
+        self._scheduled_job_id = f"nfl_board_data_refresh_{id(self)}"
+        self._setup_data_refresh_schedule()
 
-        self.board_dir = self._get_board_directory()
-        self.api_client = NFLApiClient(self.board_dir / "logos")
-
-        config_path = self.board_dir / "logo_offsets.json"
-        if config_path.exists():
-            with config_path.open() as fh:
-                raw = json.load(fh)
-            default = raw.get("_default", {})
-            self.logo_offsets = {
-                key.upper(): {**default, **value}
-                for key, value in raw.items()
-                if key != "_default"
-            }
-            self.logo_offsets["_default"] = default
-        else:
-            self.logo_offsets = {"_default": {"zoom": 1.0, "offset": (0, 0)}}
-
-        scheduler = getattr(self.data, "scheduler", None)
-        if scheduler:
-            if not scheduler.get_job(self._scheduled_job_id):
+        # Initialize with existing data if available
+        existing_snapshot = getattr(self.data, "nfl_board_snapshot", None)
+        if existing_snapshot is None:
+            # Force initial basic data fetch for immediate display
+            self._perform_basic_data_refresh()
+            # Schedule full data refresh for background
+            scheduler = getattr(self.data, "scheduler", None)
+            if scheduler:
                 scheduler.add_job(
-                    self._scheduled_refresh,
-                    "interval",
-                    seconds=self.refresh_seconds,
-                    id=self._scheduled_job_id,
-                    max_instances=1,
-                    replace_existing=True,
+                    self._perform_full_data_refresh,
+                    "date",
+                    run_date=datetime.now() + timedelta(seconds=1),
+                    id=f"{self._scheduled_job_id}_initial_full",
+                    max_instances=1
                 )
-                debug.info("NFL Data Refresh Scheduled")
-        else:
-            debug.info("Scheduling Failed: forcing refresh")
-            self._scheduled_refresh()
 
-        self._snapshot = getattr(self.data, "nfl_board_snapshot", None)
-        if self._snapshot is None:
-            self._scheduled_refresh()
-        else:
-            self.team = self._snapshot.get("team")
-            self.live_game = self._snapshot.get("live_game")
-            self.last_game = self._snapshot.get("last_game")
-            self.next_game = self._snapshot.get("next_game")
+        debug.info("NFL Board: Initialization complete")
 
-
-    # ------------------------------------------------------------------
-    # Board lifecycle
 
     def render(self):
-        self.matrix.clear()
-
-        with self._lock:
-            snapshot = self._snapshot
-
-        if snapshot is None:
-            self._scheduled_refresh()
-            with self._lock:
-                snapshot = self._snapshot
-
-        layout = self.get_board_layout("nfl_team_summary")
-        if layout is None:
-            debug.error("NFL board: layout not found")
-            return
-
-        if snapshot is None:
-            self._draw_text(layout, "primary_label", "NFL")
-            self._draw_text(layout, "primary_line1", "Loading…")
-            self.matrix.render()
-            self.sleepEvent.wait(self.display_seconds)
-            return
-
-        # Extract data from snapshot
-        favorite_teams = snapshot.get("favorite_teams", {})
-        favorite_team_games = snapshot.get("favorite_team_games", [])
-        favorite_game_team_ids = snapshot.get("favorite_game_team_ids", set())
-        other_games = snapshot.get("other_games", [])
-        todays_games = snapshot.get("todays_games", [])  # Filtered games for display
-        team_schedule_games = snapshot.get("team_schedule_games", {})  # Unfiltered schedule data for next/last games
-        error = snapshot.get("error")
-
-        # Handle error case
-        if error and not favorite_teams:
-            self._draw_text(layout, "primary_label", "NFL")
-            self._draw_text(layout, "primary_line1", error)
-            self.matrix.render()
-            self.sleepEvent.wait(self.display_seconds)
-            return
-
-        # New flow: Handle favorite teams first
-        self._render_favorite_teams(favorite_teams, favorite_team_games, favorite_game_team_ids, todays_games, team_schedule_games)
-
-        # Then show other games if setting is enabled
-        if self.show_todays_games and other_games:
-            self._render_other_games(other_games)
-
-    def _render_favorite_teams(self, favorite_teams: dict, favorite_team_games: list, favorite_game_team_ids: set, all_available_games: list = None, team_schedule_games: dict = None):
         """
-        Render favorite teams: show game board if team has game today, otherwise show team summary.
+        Main render method called by the board system.
+        Handles data refresh timing and delegates to appropriate render methods.
         """
-        if all_available_games is None:
-            all_available_games = favorite_team_games  # Use favorite team games as fallback
-        if team_schedule_games is None:
-            team_schedule_games = {}
-        for team_id in self.team_ids:
-            # Check if this favorite team has a game today
-            if team_id in favorite_game_team_ids:
-                # Team has a game today - find and show the game
-                team_game = None
-                for game in favorite_team_games:
-                    if game.home_team.id == team_id or game.away_team.id == team_id:
-                        team_game = game
-                        break
+        debug.log("NFL Board: render() method called")
 
-                if team_game:
-                    debug.log(f"Showing game for favorite team {team_id}")
-                    self._render_game(team_game)
-            else:
-                # Team has no game today - show team summary if we have team data
-                if team_id in favorite_teams:
-                    team = favorite_teams[team_id]
-                    debug.log(f"Showing team summary for favorite team {team_id} (no game today)")
+        try:
+            # Update display games from current snapshot data
+            debug.log("NFL Board: Refreshing display games")
+            self._refresh_display_games()
 
-                    # Use schedule data for this team if available, otherwise fall back to all available games
-                    team_schedule = team_schedule_games.get(team_id, all_available_games)
-                    debug.log(f"Using {len(team_schedule)} schedule games for team {team_id} summary")
+            debug.log(f"NFL Board: Have {len(self.current_display_items)} total items to display")
 
-                    self._render_team_summary(team, team_schedule)
+            # Check if we have anything to display
+            if not self.current_display_items:
+                debug.log("NFL Board: No content available, rendering message")
+                self._render_no_content_available()
+                return
+
+            # Loop through all items and display each one
+            for item in self.current_display_items:
+                # Check for sleep event interruption before each item
+                if self.sleepEvent.is_set():
+                    debug.log("NFL Board: Sleep event set, interrupting display loop")
+                    break
+
+                # Render based on item type
+                if isinstance(item, NFLGame):
+                    if item.is_live:
+                        self._render_live_game(item)
+                    elif item.is_final:
+                        self._render_completed_game(item)
+                    else:
+                        self._render_upcoming_game(item)
+                elif isinstance(item, NFLTeam):
+                    self._render_team_summary(item)
                 else:
-                    debug.warning(f"No data available for favorite team {team_id}")
+                    debug.warning(f"NFL Board: Unknown item type: {type(item)}, skipping")
+                    continue
 
-    def _render_other_games(self, other_games: list):
-        """
-        Render games that don't involve favorite teams.
-        """
-        debug.log(f"Showing {len(other_games)} other games")
-        # Sort games by date to show them in chronological order
-        sorted_other_games = sorted(other_games, key=lambda x: x.date or datetime.datetime.min.replace(tzinfo=datetime.timezone.utc))
+        except Exception as error:
+            debug.error(f"NFL Board render error: {error}")
+            self._render_error_display(str(error))
 
-        for game in sorted_other_games:
-            self._render_game(game)
+    def _setup_data_refresh_schedule(self):
+        """Set up background data refresh using APScheduler."""
+        scheduler = getattr(self.data, "scheduler", None)
+        if not scheduler:
+            debug.warning("NFL Board: No scheduler available, forcing immediate refresh")
+            self._perform_scheduled_data_refresh()
+            return
 
-
-    # Render Team Summary
-    def _render_team_summary(self, team: NFLTeam, available_games: list[NFLGame] = None):
-        layout = self.get_board_layout("nfl_team_summary")
-
-        self.matrix.clear()
-
-        # Use available games or fall back to empty list
-        if available_games is None:
-            available_games = []
-
-        # Find next and last games for this specific team
-        next_game = self._get_next_game_for_team(team.id, available_games)
-        last_game = self._get_last_game_for_team(team.id, available_games)
-
-        self._draw_logo(layout, "team_logo", team.logo_path, team.abbreviation)
-        self.matrix.draw_text_layout(layout.team_name, team.display_name, fillColor=team.color_primary, backgroundColor=team.color_secondary)
-        self.matrix.draw_text_layout(layout.record_header, "RECORD:", fillColor=team.color_primary, backgroundColor=team.color_secondary)
-        self._draw_text(layout, "record", team.record_summary)
-        self._draw_text(layout, "record_comment", team.record_comment)
-
-        # Next game section
-        self.matrix.draw_text_layout(layout.next_game_header, "NEXT GAME:", fillColor=team.color_primary, backgroundColor=team.color_secondary)
-        next_game_time = self._format_game_time(next_game) or ""
-        next_game_opponent = self._format_opponent(next_game, team.id)
-        next_game_text = f"{next_game_time} {next_game_opponent}".strip()
-        if not next_game_text:
-            next_game_text = "No games scheduled"
-        self.matrix.draw_text_layout(layout.next_game, next_game_text)
-
-        # Last game section
-        self.matrix.draw_text_layout(layout.last_game_header, "LAST GAME:", fillColor=team.color_primary, backgroundColor=team.color_secondary)
-        last_game_result = self._format_game_result(last_game, team.id)
-        self.matrix.draw_text_layout(layout.last_game_result, last_game_result)
-
-        self.matrix.render()
-        self.sleepEvent.wait(self.display_seconds)
-    
-    def _render_game(self, game: NFLGame):
-        self.matrix.clear()
-
-        layout = self.get_board_layout("nfl_live_game")
-
-        # Draw home logo
-        self._draw_logo(
-            layout, 
-            "home_team_logo", 
-            game.home_team.logo_path, 
-            game.home_team.abbreviation
-        )
-
-        # Draw away logo
-        self._draw_logo(
-            layout, 
-            "away_team_logo", 
-            game.away_team.logo_path, 
-            game.away_team.abbreviation
-        )
-
-        gradient = self._load_gradient()
-        self.matrix.draw_image([self.matrix.width/2,0], gradient, align="center")
-
-        if game.is_live or game.is_completed:
-            #self.matrix.draw_text_layout(layout.scheduled_date, "LIVE")
-            if game.is_live:
-                t, q = game.status_detail.split("-")
-            else:
-                t, q = "", game.status_detail
-            #self.matrix.draw_text_layout(layout.quarter, str(live_game.status_detail))
-            self.matrix.draw_text_layout(layout.scheduled_date, t.strip().upper())
-            self.matrix.draw_text_layout(layout.scheduled_time, q.strip().upper())
-            score = f"{game.away_score}-{game.home_score}"
-            self.matrix.draw_text_layout(layout.score, score)
+        # Only add job if it doesn't already exist
+        if not scheduler.get_job(self._scheduled_job_id):
+            scheduler.add_job(
+                self._perform_full_data_refresh,
+                "interval",
+                seconds=self.config.refresh_seconds,
+                id=self._scheduled_job_id,
+                max_instances=1,
+                replace_existing=True,
+            )
+            debug.info(f"NFL Board: Scheduled full data refresh every {self.config.refresh_seconds} seconds")
         else:
-            self.matrix.draw_text_layout(layout.scheduled_date, "TODAY")
-            self.matrix.draw_text_layout(layout.scheduled_time, self._format_game_time(game, format_type="time_only"))
-            self.matrix.draw_text_layout(layout.VS, "VS")
+            debug.info("NFL Board: Data refresh job already scheduled")
 
-        self.matrix.render()
-        self.sleepEvent.wait(self.display_seconds)
-
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-
-    def _get_board_directory(self) -> Path:
-        board_file = inspect.getfile(self.__class__)
-        return Path(board_file).resolve().parent
-
-    def _load_gradient(self) -> Image.Image:
-        """Load appropriate gradient image for current matrix size."""
-        if self.matrix.height >= 48:
-            return Image.open(get_file('assets/images/128x64_scoreboard_center_gradient.png'))
-        else:
-            return Image.open(get_file('assets/images/64x32_scoreboard_center_gradient.png'))
-
-
-    def _scheduled_refresh(self):
-        try:
-            snapshot = self._fetch_snapshot()
-            self.data.nfl_board_snapshot = snapshot
-        except Exception as exc:
-            import traceback
-            debug.error(f"NFL board: background refresh failed - {exc}")
-            debug.error(traceback.print_exc())
-            snapshot = {"error": "NFL data unavailable", "timestamp": datetime.datetime.now(datetime.timezone.utc)}
-        with self._lock:
-            self._snapshot = snapshot
-            self.error_message = snapshot.get("error")
-            self.last_refresh = snapshot.get("timestamp", datetime.datetime.now(datetime.timezone.utc))
-
-    
-    def _fetch_snapshot(self):
+    def _perform_basic_data_refresh(self):
         """
-        Fetch NFL data.
+        Quick initial data refresh for immediate display.
+        Fetches minimal data: teams list and today's games.
         """
-        try:
-            snapshot = self._fetch_data()
-            return snapshot
+        debug.info("NFL Board: Performing basic data refresh")
 
-        except Exception as exc:
-            debug.error(f"NFL board: failed to fetch snapshot - {exc}")
-            return {
-                "favorite_teams": {},
-                "favorite_team_games": [],
-                "favorite_game_team_ids": set(),
-                "other_games": [],
-                "todays_games": [],
-                "team_schedule_games": {},
-                "error": f"Failed to fetch NFL data: {exc}",
-                "timestamp": datetime.datetime.now(datetime.timezone.utc),
+        try:
+            # Create new data snapshot
+            snapshot = NFLDataSnapshot()
+
+            # Fetch all teams data (basic info only)
+            all_teams = self.api_client.get_all_teams()
+            if not all_teams:
+                snapshot.error_message = "Failed to fetch teams data"
+                debug.error("NFL Board: Failed to fetch teams data")
+                self.data.nfl_board_snapshot = snapshot
+                return
+
+            snapshot.all_teams = all_teams
+
+            # Get favorite teams subset (basic info only for now)
+            snapshot.favorite_teams = {
+                team_id: team for team_id, team in all_teams.items()
+                if team_id in self.config.team_ids
             }
 
-    def _fetch_data(self) -> dict:
-        debug.info(f"Fetching NFL data from API")
+            # Fetch today's games only (for quick display)
+            today = datetime.now()
+            snapshot.todays_games = self.api_client.get_scoreboard_for_date(today)
 
-        # Step 1: Get current games from scoreboard
-        current_games = self.api_client.get_scoreboard()
-        debug.log(f"Fetched {len(current_games)} games from current scoreboard")
+            # Identify live games
+            snapshot.live_games = [game for game in snapshot.todays_games if game.is_live]
 
-        # Step 2: Get favorite team data
-        favorite_teams = {}
-        team_schedule_games = {}
+            # Get favorite team games from today only
+            favorite_team_games = []
+            for game in snapshot.todays_games:
+                if any(game.involves_team(team_id) for team_id in self.config.team_ids):
+                    favorite_team_games.append(game)
 
-        for team_id in self.team_ids:
-            try:
-                if self.show_todays_games:
-                    # Get detailed team info when showing all games
-                    team = self.api_client.get_team(team_id)
-                    schedule = self.api_client.get_team_schedule(team_id)
-                else:
-                    # Get basic team info when memory optimized
-                    all_teams = self.api_client.get_teams()
-                    team = next((t for t in all_teams if t.id == team_id), None)
-                    schedule = self.api_client.get_team_schedule(team_id)  # Still need for next/last games
+            snapshot.favorite_team_games = favorite_team_games
 
-                if team:
-                    favorite_teams[team_id] = team
-                    team_schedule_games[team_id] = schedule
-                    debug.log(f"Loaded {len(schedule)} schedule games for team {team_id}")
+            # Store snapshot for board to use
+            self.data.nfl_board_snapshot = snapshot
 
-            except Exception as exc:
-                debug.error(f"Failed to fetch data for team {team_id}: {exc}")
-                team_schedule_games[team_id] = []
+            debug.info(f"NFL Board: Basic data refresh complete - {len(snapshot.todays_games)} today, "
+                      f"{len(snapshot.favorite_team_games)} favorite team games")
 
-        # Step 3: Handle previous games based on time settings
-        display_games = current_games.copy()
+        except Exception as error:
+            debug.error(f"NFL Board: Basic data refresh failed: {error}")
+            # Store error snapshot
+            error_snapshot = NFLDataSnapshot()
+            error_snapshot.error_message = f"Basic data refresh failed: {error}"
+            self.data.nfl_board_snapshot = error_snapshot
 
-        if self.show_previous_games_until:
-            if self._should_show_previous_games(self.show_previous_games_until):
-                # Fetch additional previous games if needed
-                previous_games = self._get_previous_games_if_needed()
-                display_games.extend(previous_games)
-                debug.log(f"Added {len(previous_games)} previous games")
-            else:
-                # Filter out old completed games
-                display_games = self._filter_games_by_time_cutoff(display_games, self.show_previous_games_until)
-                debug.log(f"Filtered games based on time cutoff")
+    def _perform_full_data_refresh(self):
+        """
+        Complete data refresh with all details.
+        Fetches comprehensive data: detailed team records, schedules, yesterday's games, etc.
+        """
+        debug.info("NFL Board: Performing full data refresh")
 
-        # Step 4: Apply business logic filtering (after time filtering)
-
-        # Filter time-filtered games for favorite teams
-        favorite_team_games = self._filter_games_by_teams(display_games, self.team_ids)
-
-        # Get other games (when showing all)
-        if self.show_todays_games:
-            other_games = [
-                game for game in display_games
-                if game.home_team.id not in self.team_ids and game.away_team.id not in self.team_ids
-            ]
-        else:
-            other_games = []
-
-        # Step 5: Update live games
-        live_games = self._filter_live_games(display_games)
-        if live_games:
-            live_game_ids = [game.event_id for game in live_games]
-            updated_scores = self.api_client.get_live_scores(live_game_ids)
-
-            # Update games with live scores
-            for i, game in enumerate(display_games):
-                if game.event_id in updated_scores:
-                    display_games[i] = updated_scores[game.event_id]
-
-        # Step 6: Build snapshot
-        favorite_game_team_ids = set()
-        for game in favorite_team_games:
-            if game.home_team.id in self.team_ids:
-                favorite_game_team_ids.add(game.home_team.id)
-            if game.away_team.id in self.team_ids:
-                favorite_game_team_ids.add(game.away_team.id)
-
-        return {
-            "favorite_teams": favorite_teams,
-            "favorite_team_games": favorite_team_games,
-            "favorite_game_team_ids": favorite_game_team_ids,
-            "other_games": other_games,
-            "todays_games": display_games,
-            "team_schedule_games": team_schedule_games,
-            "error": None,
-            "timestamp": datetime.datetime.now(datetime.timezone.utc),
-        }
-
-    def _get_previous_games_if_needed(self) -> list[NFLGame]:
-        """Get previous games when we're before the cutoff time."""
         try:
-            # Use the date range method to get games from previous days
-            extended_games = self._get_games_for_date_range(start_days_ago=3, end_days_ahead=0)
+            # Create new data snapshot
+            snapshot = NFLDataSnapshot()
 
-            # Filter to only completed games from previous days
-            today = datetime.datetime.now().date()
-            previous_games = []
+            # Fetch all teams data first
+            all_teams = self.api_client.get_all_teams()
+            if not all_teams:
+                snapshot.error_message = "Failed to fetch teams data"
+                debug.error("NFL Board: Failed to fetch teams data")
+                self.data.nfl_board_snapshot = snapshot
+                return
 
-            for game in extended_games:
-                if game.is_completed and game.date:
-                    game_date = game.date.astimezone().date()
-                    if game_date < today:
-                        previous_games.append(game)
+            snapshot.all_teams = all_teams
 
-            return previous_games
+            # Populate detailed information for ALL teams (not just favorites)
+            # This gives us full records, standings info, etc.
+            all_team_ids = list(all_teams.keys())
+            detailed_count = self.api_client.populate_team_details(all_team_ids)
+            debug.log(f"NFL Board: Loaded detailed data for {detailed_count} total teams")
 
-        except Exception as exc:
-            debug.error(f"Failed to get previous games: {exc}")
-            return []
+            # Get favorite teams subset (now with detailed records)
+            snapshot.favorite_teams = {
+                team_id: team for team_id, team in all_teams.items()
+                if team_id in self.config.team_ids
+            }
+
+            # Fetch today's games
+            today = datetime.now()
+            snapshot.todays_games = self.api_client.get_scoreboard_for_date(today)
+
+            # Fetch yesterday's games
+            yesterday = today - timedelta(days=1)
+            snapshot.yesterdays_games = self.api_client.get_scoreboard_for_date(yesterday)
+
+            # Identify live games
+            snapshot.live_games = [game for game in snapshot.todays_games if game.is_live]
+
+            # Get favorite team games from today and yesterday
+            favorite_team_games = []
+            all_recent_games = snapshot.todays_games + snapshot.yesterdays_games
+
+            for game in all_recent_games:
+                if any(game.involves_team(team_id) for team_id in self.config.team_ids):
+                    favorite_team_games.append(game)
+
+            snapshot.favorite_team_games = favorite_team_games
+
+            # Get team schedules for favorite teams (for upcoming games)
+            for team_id in self.config.team_ids:
+                team_schedule = self.api_client.get_team_schedule(team_id)
+                snapshot.team_schedules[team_id] = team_schedule
+
+            # Store snapshot for board to use
+            self.data.nfl_board_snapshot = snapshot
+
+            debug.info(f"NFL Board: Full data refresh complete - {len(snapshot.todays_games)} today, "
+                      f"{len(snapshot.yesterdays_games)} yesterday, {len(snapshot.favorite_team_games)} favorite team games")
+
+        except Exception as error:
+            debug.error(f"NFL Board: Full data refresh failed: {error}")
+            # Store error snapshot
+            error_snapshot = NFLDataSnapshot()
+            error_snapshot.error_message = f"Full data refresh failed: {error}"
+            self.data.nfl_board_snapshot = error_snapshot
 
 
-    def _draw_text(self, layout, element: str, text: Optional[str]) -> None:
-        if not text:
+    def _refresh_display_games(self):
+        """Update the unified list of items that should be displayed."""
+        snapshot = getattr(self.data, "nfl_board_snapshot", None)
+        if not self._is_snapshot_valid(snapshot):
+            debug.warning("NFL Board: No valid data snapshot available")
+            self.current_display_items = []
             return
-        if not hasattr(layout, element):
-            return
-        self.matrix.draw_text_layout(getattr(layout, element), str(text))
 
-    def _draw_logo(self, layout, element_name: str, logo_path: Path, team_abbreviation: str) -> None:
+        # Get games to display using consolidated logic
+        filtered_games = self._get_games_for_display(snapshot)
+
+        # Separate favorite team games from other games
+        favorite_team_games = []
+        other_games = []
+        for game in filtered_games:
+            if any(game.involves_team(team_id) for team_id in self.config.team_ids):
+                favorite_team_games.append(game)
+            else:
+                other_games.append(game)
+
+        # Determine which teams should show team summaries instead of games
+        teams_with_games_today = set()
+        for game in favorite_team_games:
+            if game.date and game.date.date() == datetime.now().date():
+                for team_id in self.config.team_ids:
+                    if game.involves_team(team_id):
+                        teams_with_games_today.add(team_id)
+
+        # Build list of teams to show summaries for (favorite teams without games today)
+        teams_for_summaries = []
+        for team_id in self.config.team_ids:
+            if team_id not in teams_with_games_today and team_id in snapshot.favorite_teams:
+                teams_for_summaries.append(snapshot.favorite_teams[team_id])
+
+        # Build unified display list: favorite games first, then other games, then team summaries
+        display_items = []
+        display_items.extend(favorite_team_games)  # Favorite team games first (highest priority)
+        display_items.extend(other_games)          # Then other games if show_all_games is enabled
+        display_items.extend(teams_for_summaries)  # Finally team summaries for teams without games
+
+        self.current_display_items = display_items
+
+        debug.log(f"NFL Board: Updated unified display - {len(display_items)} total items ")
+        debug.log(f"NFL Board: {len(favorite_team_games)} favorite games, {len(other_games)} other games, {len(teams_for_summaries)} team summaries")
+
+    def _get_games_for_display(self, snapshot: 'NFLDataSnapshot') -> List['NFLGame']:
+        """
+        Get games that should be displayed based on configuration.
+        Consolidates all game filtering logic in the board class.
+        """
+        games_to_show = []
+
+        # Always include live games involving favorite teams
+        for game in snapshot.live_games:
+            if any(game.involves_team(team_id) for team_id in self.config.team_ids):
+                games_to_show.append(game)
+
+        # Include favorite team games
+        for game in snapshot.favorite_team_games:
+            if game not in games_to_show:
+                games_to_show.append(game)
+
+        # Include today's games if configured
+        if self.config.show_all_games:
+            for game in snapshot.todays_games:
+                if game not in games_to_show:
+                    games_to_show.append(game)
+
+        # Include yesterday's games if before cutoff time
+        current_time = datetime.now().time()
+        if current_time < self.config.show_previous_games_until_time:
+            for game in snapshot.yesterdays_games:
+                if game not in games_to_show:
+                    games_to_show.append(game)
+
+        # Apply additional filtering for previous games using config rules
+        filtered_games = []
+        for game in games_to_show:
+            if self.config.should_show_previous_game(game):
+                filtered_games.append(game)
+
+        # Sort games: live first, then by date
+        filtered_games.sort(key=lambda g: (not g.is_live, g.date or datetime.min))
+
+        return filtered_games
+
+    def _is_snapshot_valid(self, snapshot: 'NFLDataSnapshot') -> bool:
+        """Check if snapshot has valid data."""
+        return snapshot and not snapshot.error_message and bool(snapshot.all_teams)
+
+
+    def _render_live_game(self, game: NFLGame):
+        """Render a live game display."""
+        debug.log(f"NFL Board: Rendering live game {game.away_team.abbreviation} @ {game.home_team.abbreviation}")
+
+        self.matrix.clear()
+        layout = self.get_board_layout('nfl_game')
+
+        if not layout:
+            self._render_fallback_game_display(game, "LIVE")
+            return
+
+        # Render team information
+        self._render_team_display(layout, game, show_scores=True)
+
+        # Render live game status
+        live_status = self._format_live_game_status(game)
+        if hasattr(layout, 'game_status'):
+            self.matrix.draw_text_layout(layout.game_status, live_status)
+
+        # VS
+        if hasattr(layout, "VS"):
+            self.matrix.draw_text_layout(layout.VS, "VS")
+        
+        # Render to the display
+        self.matrix.render()
+
+        # Display the rendered content for configured duration
+        self.sleepEvent.wait(self.config.display_seconds)
+
+    def _render_completed_game(self, game: NFLGame):
+        """Render a completed game display."""
+        debug.log(f"NFL Board: Rendering completed game {game.away_team.abbreviation} @ {game.home_team.abbreviation}")
+
+        self.matrix.clear()
+        layout = self.get_board_layout('nfl_game')
+
+        if not layout:
+            self._render_fallback_game_display(game, "FINAL")
+            return
+
+        # Render team information with final scores
+        self._render_team_display(layout, game, show_scores=True)
+
+        # Render final status
+        if hasattr(layout, 'scheduled_date'):
+            self.matrix.draw_text_layout(layout.scheduled_date, "FINAL")
+        
+        # Render to the display
+        self.matrix.render()
+
+        # Display the rendered content for configured duration
+        self.sleepEvent.wait(self.config.display_seconds)
+
+    def _render_upcoming_game(self, game: NFLGame):
+        """Render an upcoming game display."""
+        debug.log(f"NFL Board: Rendering upcoming game {game.away_team.abbreviation} @ {game.home_team.abbreviation}")
+
+        self.matrix.clear()
+        layout = self.get_board_layout('nfl_game')
+
+        if not layout:
+            debug.warning(f"NFL Board: Couldn't find layout, falling back to default layout")
+            self._render_fallback_game_display(game, self._format_game_datetime(game))
+            return
+
+        # Render team information with records instead of scores
+        self._render_team_display(layout, game, show_scores=False)
+
+        # Render game date/time
+        if hasattr(layout, 'scheduled_date'):
+            self.matrix.draw_text_layout(layout.scheduled_date, "TODAY")
+        if hasattr(layout, "scheduled_time"):
+            self.matrix.draw_text_layout(layout.scheduled_time, self._format_game_datetime(game, format_type="time_only"))
+
+        # VS
+        if hasattr(layout, "VS"):
+            self.matrix.draw_text_layout(layout.VS, "VS")
+
+        # Render to the display
+        self.matrix.render()
+
+        # Display the rendered content for configured duration
+        self.sleepEvent.wait(self.config.display_seconds)
+
+    def _render_team_display(self, layout, game: NFLGame, show_scores: bool):
+        """Render team information (logos, names, scores/records)."""
+        # Render team logos
+        if hasattr(layout, 'away_team_logo'):
+            away_logo = self._get_team_logo(game.away_team)
+            if away_logo:
+                self._draw_logo(layout, "away_team_logo", away_logo, game.away_team.abbreviation)
+
+        if hasattr(layout, 'home_team_logo'):
+            home_logo = self._get_team_logo(game.home_team)
+            if home_logo:
+                self._draw_logo(layout, "home_team_logo", home_logo, game.home_team.abbreviation)
+
+        # Render gradient - after logos but before other visuals
+        self.matrix.draw_image([self.matrix.width/2,0], self.gradient, align="center")
+
+        # Render team names
+        # if hasattr(layout, 'away_team_name'):
+        #     self.matrix.draw_text_layout(layout.away_team_name, game.away_team.abbreviation)
+
+        # if hasattr(layout, 'home_team_name'):
+        #     self.matrix.draw_text_layout(layout.home_team_name, game.home_team.abbreviation)
+
+        # Render scores or records
+        if show_scores:
+            if hasattr(layout, 'score'):
+                self.matrix.draw_text_layout(layout.score, str(f"{game.away_score}-{game.home_score}"))
+        else:
+            if hasattr(layout, 'away_team_score'):
+                self.matrix.draw_text_layout(layout.away_team_score, game.away_team.record_text)
+            if hasattr(layout, 'home_team_score'):
+                self.matrix.draw_text_layout(layout.home_team_score, game.home_team.record_text)
+
+    def _render_team_summary(self, team: NFLTeam):
+        """Render team summary display showing team info, record, next/last games."""
+        debug.log(f"NFL Board: Rendering team summary for {team.display_name}")
+        debug.log(f"NFL Board: Team record: {team.record_text} (detailed: {team.has_detailed_record})")
+        debug.log(f"NFL Board: Team colors: {team.color_primary}, {team.color_secondary}")
+
+        if not team.has_detailed_record:
+            debug.warning(f"NFL Board: Team {team.display_name} using basic data - detailed record not loaded")
+
+        self.matrix.clear()
+        layout = self.get_board_layout('nfl_team_summary')
+
+        if not layout:
+            debug.warning("NFL Board: No team summary layout found, using fallback")
+            self._render_fallback_team_summary(team)
+            return
+
+        debug.log("NFL Board: Using team summary layout")
+
+        # Get team's schedule data for next/last game info
+        snapshot = getattr(self.data, "nfl_board_snapshot", None)
+        team_schedule = []
+        if snapshot and team.team_id in snapshot.team_schedules:
+            team_schedule = snapshot.team_schedules[team.team_id]
+
+        # Render team logo
+        if hasattr(layout, 'team_logo'):
+            team_logo = self._get_team_logo(team)
+            if team_logo:
+                #self.matrix.draw_image_layout(layout.team_logo, team_logo)
+                self._draw_logo(layout, 'team_logo', team_logo, team.abbreviation)
+
+        # Render team name with team colors
+        if hasattr(layout, 'team_name'):
+            self.matrix.draw_text_layout(
+                layout.team_name,
+                team.display_name,
+                fillColor=team.color_primary,
+                backgroundColor=team.color_secondary
+            )
+
+        # Render record
+        if hasattr(layout, 'record_header'):
+            debug.log("NFL Board: Rendering record header")
+            self.matrix.draw_text_layout(layout.record_header, "RECORD:", fillColor=team.color_primary, backgroundColor=team.color_secondary)
+        if hasattr(layout, 'record'):
+            # Use record_text property which has safe fallbacks
+            #record_display = team.record_summary if team.record_summary else team.record_text
+            debug.log(f"NFL Board: Rendering record: {team.record_text}")
+            self._draw_text(layout, "record", team.record_text)
+        if hasattr(layout, 'record_comment') and team.record_comment:
+            debug.log(f"NFL Board: Rendering record comment: {team.record_comment}")
+            self._draw_text(layout, "record_comment", team.record_comment)
+
+        # Render next game information
+        next_game = self._get_next_game_for_team(team.team_id, team_schedule)
+        if hasattr(layout, 'next_game_header'):
+            self.matrix.draw_text_layout(layout.next_game_header, "NEXT GAME:", fillColor=team.color_primary, backgroundColor=team.color_secondary)
+        if hasattr(layout, 'next_game'):
+            next_game_text = self._format_next_game_display(next_game, team.team_id)
+            self.matrix.draw_text_layout(layout.next_game, next_game_text)
+
+        # Render last game information
+        last_game = self._get_last_game_for_team(team.team_id, team_schedule)
+        if hasattr(layout, 'last_game_header'):
+            self.matrix.draw_text_layout(layout.last_game_header, "LAST GAME:", fillColor=team.color_primary, backgroundColor=team.color_secondary)
+        if hasattr(layout, 'last_game_result'):
+            last_game_text = self._format_last_game_display(last_game, team.team_id)
+            self.matrix.draw_text_layout(layout.last_game_result, last_game_text)
+
+        # Render to the display
+        self.matrix.render()
+
+        # Display the rendered content for configured duration
+        self.sleepEvent.wait(self.config.display_seconds)
+
+    def _render_no_content_available(self):
+        """Render display when no games or team summaries are available."""
+        debug.log("NFL Board: Rendering no content available message")
+
+        self.matrix.clear()
+        layout = self.get_board_layout('nfl_game')
+
+        if layout and hasattr(layout, 'game_status'):
+            self.matrix.draw_text_layout(layout.game_status, "No NFL Content")
+        else:
+            # Fallback to centered text
+            font = self.data.config.layout.font
+            self.matrix.draw_text_centered(self.display_height // 2, "No NFL Content", font)
+
+        # Render to the display
+        self.matrix.render()
+
+        # Display the rendered content for configured duration
+        self.sleepEvent.wait(self.config.display_seconds)
+
+    def _render_error_display(self, error_message: str):
+        """Render error message display."""
+        debug.log(f"NFL Board: Rendering error display: {error_message}")
+
+        self.matrix.clear()
+        layout = self.get_board_layout('nfl')
+
+        if layout and hasattr(layout, 'game_status'):
+            self.matrix.draw_text_layout(layout.game_status, "NFL Error")
+        else:
+            # Fallback to centered text
+            font = self.data.config.layout.font
+            self.matrix.draw_text_centered(self.display_height // 2, "NFL Error", font)
+
+        # Render to the display
+        self.matrix.render()
+
+        # Display the rendered content for configured duration
+        self.sleepEvent.wait(self.config.display_seconds)
+
+    def _render_fallback_game_display(self, game: NFLGame, status_text: str):
+        """Render game information when no layout is available."""
+        font = self.data.config.layout.font
+
+        # Simple text display
+        away_text = f"{game.away_team.abbreviation} {game.away_score}"
+        home_text = f"{game.home_team.abbreviation} {game.home_score}"
+
+        self.matrix.draw_text_centered(15, away_text, font)
+        self.matrix.draw_text_centered(25, "vs", font)
+        self.matrix.draw_text_centered(35, home_text, font)
+        self.matrix.draw_text_centered(50, status_text, font)
+
+        # Render to the display
+        self.matrix.render()
+
+        # Display the rendered content for configured duration
+        self.sleepEvent.wait(self.config.display_seconds)
+
+    def _get_team_logo(self, team: NFLTeam) -> Optional[Image.Image]:
+        """Get team logo image with caching and automatic downloading."""
+        cache_key = f"{team.abbreviation}_logo"
+
+        if cache_key in self.logo_cache:
+            return self.logo_cache[cache_key]
+
+        try:
+            # First try the API client's logo path resolution and download functionality
+            logo_path = self.api_client.get_team_logo_path(team, size=128, download_if_missing=True)
+
+            if logo_path and logo_path.exists():
+                logo_image = Image.open(logo_path)
+                self.logo_cache[cache_key] = logo_image
+                debug.log(f"NFL Board: Loaded logo for {team.abbreviation} from {logo_path}")
+                return logo_image
+
+            debug.log(f"NFL Board: No logo available for {team.abbreviation} (URL: {team.logo_url})")
+
+        except Exception as error:
+            debug.error(f"NFL Board: Failed to load logo for {team.abbreviation}: {error}")
+
+        return None
+    
+    def _draw_logo(self, layout, element_name: str, logo: Image, team_abbreviation: str) -> None:
         """
         Draw a team logo using element-specific offsets.
 
@@ -459,7 +724,7 @@ class NFLBoard(BoardBase):
             logo_path: Path to the logo image file
             team_abbreviation: Team abbreviation for offset lookup
         """
-        if not hasattr(layout, element_name) or not logo_path or not logo_path.exists():
+        if not hasattr(layout, element_name) or not logo:
             return
 
         # Use element_name as the offset key
@@ -468,35 +733,19 @@ class NFLBoard(BoardBase):
         zoom = float(offsets.get("zoom", 1.0))
         offset_x, offset_y = offsets.get("offset", (0, 0))
 
-        # Load and cache the base logo
-        base_key = (logo_path, 0)
-        base_logo = self._team_logo_cache.get(base_key)
-        if base_logo is None:
-            with Image.open(logo_path) as img:
-                base_logo = img.convert("RGBA").copy()
-            self._team_logo_cache[base_key] = base_logo
-
         # Scale logo to appropriate size
         max_dimension = 64 if self.matrix.height >= 48 else min(32, self.matrix.height)
-        scaled_key = (logo_path, max_dimension)
-        logo = self._team_logo_cache.get(scaled_key)
-        if logo is None:
-            logo = base_logo.copy()
-            if max(logo.size) > max_dimension:
-                logo.thumbnail((max_dimension, max_dimension), self._thumbnail_filter())
-            self._team_logo_cache[scaled_key] = logo
+
+        if max(logo.size) > max_dimension:
+            logo.thumbnail((max_dimension, max_dimension), self._thumbnail_filter())
 
         # Apply zoom if needed
         if zoom != 1.0:
-            zoom_key = (logo_path, max_dimension, zoom, element_name)
-            zoomed = self._team_logo_cache.get(zoom_key)
-            if zoomed is None:
-                w, h = logo.size
-                zoomed = logo.resize(
-                    (max(1, int(round(w * zoom))), max(1, int(round(h * zoom)))),
-                    self._thumbnail_filter(),
-                )
-                self._team_logo_cache[zoom_key] = zoomed
+            w, h = logo.size
+            zoomed = logo.resize(
+                (max(1, int(round(w * zoom))), max(1, int(round(h * zoom)))),
+                self._thumbnail_filter(),
+            )
             logo = zoomed
 
         # Apply offset to layout element
@@ -505,6 +754,13 @@ class NFLBoard(BoardBase):
         element.position = (x + offset_x, y + offset_y)
 
         self.matrix.draw_image_layout(element, logo)
+
+    @staticmethod
+    def _thumbnail_filter():
+        resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS", None)
+        if resampling is None:
+            resampling = getattr(Image, "LANCZOS", getattr(Image, "ANTIALIAS", Image.BICUBIC))
+        return resampling
 
     def _get_logo_offsets(self, team_abbreviation: str, element_name: str) -> dict:
         """Get logo offsets for a team and element, with fallback hierarchy."""
@@ -520,40 +776,45 @@ class NFLBoard(BoardBase):
 
         # Fall back to global default
         return self.logo_offsets.get("_default", {"zoom": 1.0, "offset": (0, 0)})
+    
+    def _load_logo_offsets(self) -> Dict[str, Dict[str, any]]:
+        """Load logo positioning offsets from configuration file."""
+        try:
+            offsets_path = self._get_board_directory() / "logo_offsets.json"
 
-    @staticmethod
-    def _thumbnail_filter():
-        resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS", None)
-        if resampling is None:
-            resampling = getattr(Image, "LANCZOS", getattr(Image, "ANTIALIAS", Image.BICUBIC))
-        return resampling
+            if offsets_path.exists():
+                with offsets_path.open() as file:
+                    raw_offsets = json.load(file)
 
-    def _format_opponent(self, game: Optional[NFLGame], team_id: str) -> str:
-        if not game:
-            return "No games scheduled"
+                # Process offsets with defaults
+                default_offset = raw_offsets.get("_default", {"zoom": 1.0, "offset": (0, 0)})
+                processed_offsets = {}
 
-        opponent = game.get_opponent(team_id)
-        if not opponent:
-            return "Unknown"
+                for key, value in raw_offsets.items():
+                    if key != "_default":
+                        processed_offsets[key.upper()] = {**default_offset, **value}
 
-        prefix = "VS" if game.is_home_team(team_id) else "AT"
-        opponent_text = opponent.location or opponent.abbreviation or opponent.name
-        return f"{prefix} {opponent_text}".strip()
+                processed_offsets["_default"] = default_offset
+                return processed_offsets
 
-    def _format_game_time(self, game: Optional[NFLGame], format_type: str = "full") -> Optional[str]:
-        """Format game time with flexible output options.
+        except Exception as error:
+            debug.error(f"NFL Board: Failed to load logo offsets: {error}")
 
-        Args:
-            game: NFLGame object (can be None)
-            format_type: "full", "time_only", "date_only", or "short"
+        return {"_default": {"zoom": 1.0, "offset": (0, 0)}}
 
-        Returns:
-            Formatted time string or None
-        """
-        if not game:
-            return None
+    def _format_live_game_status(self, game: NFLGame) -> str:
+        """Format status text for live games."""
+        if game.quarter and game.time_remaining:
+            return f"Q{game.quarter} {game.time_remaining}"
+        elif game.quarter:
+            return f"Q{game.quarter}"
+        else:
+            return "LIVE"
+
+    def _format_game_datetime(self, game: NFLGame, format_type: str = "full") -> str:
+        """Format game date and time for display."""
         if not game.date:
-            return game.status_detail or None
+            return "TBD"
         local_dt = game.date.astimezone()
 
         if format_type == "time_only":
@@ -575,128 +836,148 @@ class NFLBoard(BoardBase):
             ampm = "AM" if local_dt.hour < 12 else "PM"
             return f"{weekday} {local_dt.month}/{local_dt.day} {hour}:{minute:02d} {ampm}"
 
-    def _format_game_result(self, game: Optional[NFLGame], team_id: str) -> str:
-        if not game:
-            return "No recent games"
-
-        result = game.result_token(team_id) or ""
-        score = ""
-        our_score = game.get_team_score(team_id)
-        opponent_score = game.get_opponent_score(team_id)
-        if our_score is not None and opponent_score is not None:
-            score = f"{our_score}-{opponent_score}"
-        opponent = self._format_opponent(game, team_id)
-        return " ".join(part for part in [result, score, opponent] if part)
-
-    def _get_next_game_for_team(self, team_id: str, games: list[NFLGame]) -> Optional[NFLGame]:
+    def _get_next_game_for_team(self, team_id: str, team_schedule: List[NFLGame]) -> Optional[NFLGame]:
         """Find the next upcoming game for a specific team."""
+        now = datetime.now(timezone.utc)  # Make timezone-aware
         upcoming_games = []
-        for game in games:
-            if (game.home_team.id == team_id or game.away_team.id == team_id) and not game.is_completed and not game.is_live:
+
+        for game in team_schedule:
+            if (game.involves_team(team_id) and
+                game.date and
+                game.date > now and
+                not game.is_final):
                 upcoming_games.append(game)
 
-        if not upcoming_games:
-            return None
+        if upcoming_games:
+            # Sort by date and return the earliest
+            upcoming_games.sort(key=lambda g: g.date or datetime.max.replace(tzinfo=timezone.utc))
+            return upcoming_games[0]
 
-        # Sort by date and return the earliest one
-        upcoming_games.sort(key=lambda g: g.date or datetime.datetime.max.replace(tzinfo=datetime.timezone.utc))
-        return upcoming_games[0]
+        return None
 
-    def _get_last_game_for_team(self, team_id: str, games: list[NFLGame]) -> Optional[NFLGame]:
+    def _get_last_game_for_team(self, team_id: str, team_schedule: List[NFLGame]) -> Optional[NFLGame]:
         """Find the most recent completed game for a specific team."""
+        now = datetime.now(timezone.utc)  # Make timezone-aware
         completed_games = []
-        for game in games:
-            if (game.home_team.id == team_id or game.away_team.id == team_id) and game.is_completed:
+
+        for game in team_schedule:
+            if (game.involves_team(team_id) and
+                game.date and
+                game.date < now and
+                game.is_final):
                 completed_games.append(game)
 
-        if not completed_games:
-            return None
+        if completed_games:
+            # Sort by date and return the most recent
+            completed_games.sort(key=lambda g: g.date or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+            return completed_games[0]
 
-        # Sort by date and return the most recent one
-        completed_games.sort(key=lambda g: g.date or datetime.datetime.min.replace(tzinfo=datetime.timezone.utc), reverse=True)
-        return completed_games[0]
+        return None
 
+    def _format_next_game_display(self, game: Optional[NFLGame], team_id: str) -> str:
+        """Format next game information for display."""
+        if not game:
+            return "---"
 
-    # ------------------------------------------------------------------
-    # Business Logic Methods (moved from data layer)
+        opponent = game.get_opposing_team(team_id)
+        if not opponent:
+            return "TBD"
 
-    def _filter_games_by_teams(self, games: list[NFLGame], team_ids: list[str]) -> list[NFLGame]:
-        """Filter games to only include those involving specified teams."""
-        team_ids_set = set(str(tid) for tid in team_ids)
-        return [
-            game for game in games
-            if game.home_team.id in team_ids_set or game.away_team.id in team_ids_set
-        ]
+        game_time = self._format_game_datetime(game)
 
+        # Determine if home or away
+        if game.home_team.team_id == team_id:
+            opponent_text = f"vs {opponent.abbreviation}"
+        else:
+            opponent_text = f"@ {opponent.abbreviation}"
 
-    def _filter_completed_games(self, games: list[NFLGame]) -> list[NFLGame]:
-        """Filter games to only include completed games."""
-        return [game for game in games if game.is_completed]
+        return f"{game_time} {opponent_text}".upper()
 
-    def _filter_live_games(self, games: list[NFLGame]) -> list[NFLGame]:
-        """Filter games to only include currently live games."""
-        return [game for game in games if game.is_live]
+    def _format_last_game_display(self, game: Optional[NFLGame], team_id: str) -> str:
+        """Format last game result for display."""
+        if not game:
+            return "---"
 
-    def _filter_upcoming_games(self, games: list[NFLGame]) -> list[NFLGame]:
-        """Filter games to only include upcoming games."""
-        return [game for game in games if not game.is_completed and not game.is_live]
+        opponent = game.get_opposing_team(team_id)
+        if not opponent:
+            return "TBD"
 
-    def _should_show_previous_games(self, cutoff_time: str) -> bool:
-        """Determine if previous games should be shown based on current time vs cutoff."""
-        if not cutoff_time:
-            return False
+        # Determine result and format
+        if game.home_team.team_id == team_id:
+            team_score = game.home_score
+            opponent_score = game.away_score
+            opponent_text = f"vs {opponent.abbreviation}"
+        else:
+            team_score = game.away_score
+            opponent_score = game.home_score
+            opponent_text = f"@ {opponent.abbreviation}"
 
-        try:
-            cutoff_hour, cutoff_minute = map(int, cutoff_time.split(':'))
-            now = datetime.datetime.now()
-            today_cutoff = now.replace(hour=cutoff_hour, minute=cutoff_minute, second=0, microsecond=0)
-            return now < today_cutoff
-        except Exception:
-            return False
+        # Format result
+        if team_score > opponent_score:
+            result = "W"
+        elif team_score < opponent_score:
+            result = "L"
+        else:
+            result = "T"
 
-    def _filter_games_by_time_cutoff(self, games: list[NFLGame], cutoff_time: str) -> list[NFLGame]:
-        """Remove old completed games when past the cutoff time."""
-        if not cutoff_time or self._should_show_previous_games(cutoff_time):
-            return games
+        return f"{result} {team_score}-{opponent_score} {opponent_text}".upper()
 
-        today = datetime.datetime.now().date()
-        filtered_games = []
+    def _render_fallback_team_summary(self, team: NFLTeam):
+        """Render team summary when no layout is available."""
+        debug.log(f"NFL Board: Rendering fallback team summary for {team.display_name}")
 
-        for game in games:
-            if not game.date:
-                filtered_games.append(game)
-                continue
+        font = self.data.config.layout.font
+        debug.log(f"NFL Board: Using font: {font}")
 
-            game_date = game.date.astimezone().date()
+        # Simple text display
+        debug.log("NFL Board: Drawing team name")
+        self.matrix.draw_text_centered(10, team.display_name, font)
 
-            # Keep games from today and future, remove old completed games
-            if game_date >= today:
-                filtered_games.append(game)
-            elif not game.is_completed:
-                # Keep non-completed games from previous days (edge case)
-                filtered_games.append(game)
+        debug.log(f"NFL Board: Drawing record: {team.record_text}")
+        self.matrix.draw_text_centered(25, f"Record: {team.record_text}", font)
 
-        return filtered_games
+        debug.log("NFL Board: Drawing summary label")
+        self.matrix.draw_text_centered(40, "Team Summary", font)
 
-    def _get_games_for_date_range(self, start_days_ago: int = 3, end_days_ahead: int = 0) -> list[NFLGame]:
-        """Get games from a date range using the data layer."""
-        all_games = []
-        now = datetime.datetime.now()
+        debug.log("NFL Board: Calling matrix.render()")
+        # Render to the display
+        self.matrix.render()
 
-        # Fetch games from multiple days
-        for days_offset in range(-start_days_ago, end_days_ahead + 1):
-            target_date = now + datetime.timedelta(days=days_offset)
-            date_str = target_date.strftime("%Y%m%d")
+        debug.log(f"NFL Board: Waiting {self.config.display_seconds} seconds")
+        # Display the rendered content for configured duration
+        self.sleepEvent.wait(self.config.display_seconds)
 
-            try:
-                if days_offset == 0:
-                    # Use current scoreboard for today
-                    games = self.api_client.get_scoreboard()
-                else:
-                    # Use specific date for other days
-                    games = self.api_client.get_scoreboard(date_str)
-                all_games.extend(games)
-            except Exception as exc:
-                debug.error(f"Failed to fetch games for {date_str}: {exc}")
+        debug.log("NFL Board: Fallback team summary complete")
 
-        return all_games
+    def _draw_text(self, layout, element_name: str, text: str) -> None:
+        """
+        Helper method to draw text on layout elements, similar to old implementation.
+        """
+        if hasattr(layout, element_name):
+            element = getattr(layout, element_name)
+            self.matrix.draw_text_layout(element, text)
+
+    def _load_gradient(self) -> Image.Image:
+        """Load appropriate gradient image for current matrix size."""
+        if self.matrix.height >= 48:
+            return Image.open(get_file('assets/images/128x64_scoreboard_center_gradient.png'))
+        else:
+            return Image.open(get_file('assets/images/64x32_scoreboard_center_gradient.png'))
+        
+    def _get_board_directory(self) -> Path:
+        """Get the directory path for this board plugin."""
+        return Path(__file__).parent
+
+    def cleanup(self):
+        """Clean up resources when board is unloaded."""
+        debug.info("NFL Board: Cleaning up resources")
+
+        # Clear caches and display state
+        self.logo_cache.clear()
+        self.current_display_items.clear()
+
+        # Remove scheduled job if it exists
+        scheduler = getattr(self.data, "scheduler", None)
+        if scheduler and scheduler.get_job(self._scheduled_job_id):
+            scheduler.remove_job(self._scheduled_job_id)
+            debug.info("NFL Board: Removed scheduled data refresh job")
