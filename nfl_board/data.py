@@ -5,7 +5,7 @@ Handles API calls and data processing using APScheduler for background refresh.
 
 import debug
 import requests
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
 from pathlib import Path
@@ -152,7 +152,7 @@ class NFLApiClient:
         date_string = date.strftime("%Y%m%d")
         url = f"{self.base_url}/scoreboard?dates={date_string}"
 
-        debug.info(f"NFL Board: Fetching scoreboard for {date_string}")
+        debug.log(f"NFL Board: Fetching scoreboard for {date_string}")
 
         try:
             response = requests.get(url, timeout=10)
@@ -167,7 +167,7 @@ class NFLApiClient:
                 if game:
                     games.append(game)
 
-            debug.info(f"NFL Board: Found {len(games)} games for {date_string}")
+            debug.log(f"NFL Board: Found {len(games)} games for {date_string}")
             return games
 
         except Exception as exc:
@@ -226,7 +226,7 @@ class NFLApiClient:
         """
         try:
             url = f"{self.base_url}/teams/{team_id}/schedule"
-            debug.info(f"NFL Board: Fetching schedule for team {team_id}")
+            debug.log(f"NFL Board: Fetching schedule for team {team_id}")
 
             response = requests.get(url, timeout=10)
             response.raise_for_status()
@@ -240,7 +240,7 @@ class NFLApiClient:
                 if game:
                     games.append(game)
 
-            debug.info(f"NFL Board: Found {len(games)} scheduled games for team {team_id}")
+            debug.log(f"NFL Board: Found {len(games)} scheduled games for team {team_id}")
             return games
 
         except Exception as exc:
@@ -545,7 +545,7 @@ class NFLApiClient:
             return cache_path
 
         try:
-            debug.info(f"NFL Board: Downloading logo for {team.abbreviation} from {team.logo_url}")
+            debug.log(f"NFL Board: Downloading logo for {team.abbreviation} from {team.logo_url}")
 
             # Download the logo
             response = requests.get(team.logo_url, timeout=10)
@@ -583,7 +583,7 @@ class NFLApiClient:
             # Save as PNG
             square_image.save(cache_path, 'PNG')
 
-            debug.info(f"NFL Board: Cached logo for {team.abbreviation} at {cache_path}")
+            debug.log(f"NFL Board: Cached logo for {team.abbreviation} at {cache_path}")
             return cache_path
 
         except Exception as exc:
@@ -633,14 +633,14 @@ class NFLApiClient:
             if logo_path:
                 success_count += 1
 
-        debug.info(f"NFL Board: Preloaded {success_count}/{len(teams)} team logos")
+        debug.log(f"NFL Board: Preloaded {success_count}/{len(teams)} team logos")
         return success_count
 
 
 class NFLDataSnapshot:
     """
-    Container for NFL data that gets stored on the scheduler refresh.
-    Organizes data for easy access by the board rendering logic.
+    Pure data container for NFL data that gets stored on the scheduler refresh.
+    Contains only data storage, no business logic.
     """
 
     def __init__(self):
@@ -659,49 +659,3 @@ class NFLDataSnapshot:
 
         # Team schedules for favorite teams
         self.team_schedules: Dict[str, List[NFLGame]] = {}
-
-    def add_error(self, error_message: str):
-        """Add an error message to the snapshot."""
-        self.error_message = error_message
-        debug.error(f"NFL Board snapshot error: {error_message}")
-
-    def is_valid(self) -> bool:
-        """Check if this snapshot has valid data."""
-        return self.error_message is None and bool(self.all_teams)
-
-    def get_games_for_display(self, favorite_team_ids: List[str],
-                              show_all_games: bool,
-                              cutoff_time: time) -> List[NFLGame]:
-        """
-        Get games that should be displayed based on configuration.
-        Implements the display logic for what games to show.
-        """
-        games_to_show = []
-
-        # Always include live games involving favorite teams
-        for game in self.live_games:
-            if any(game.involves_team(team_id) for team_id in favorite_team_ids):
-                games_to_show.append(game)
-
-        # Include favorite team games
-        for game in self.favorite_team_games:
-            if game not in games_to_show:
-                games_to_show.append(game)
-
-        # Include today's games if configured
-        if show_all_games:
-            for game in self.todays_games:
-                if game not in games_to_show:
-                    games_to_show.append(game)
-
-        # Include yesterday's games if before cutoff time
-        current_time = datetime.now().time()
-        if current_time < cutoff_time:
-            for game in self.yesterdays_games:
-                if game not in games_to_show:
-                    games_to_show.append(game)
-
-        # Sort games: live first, then by date
-        games_to_show.sort(key=lambda g: (not g.is_live, g.date or datetime.min))
-
-        return games_to_show
