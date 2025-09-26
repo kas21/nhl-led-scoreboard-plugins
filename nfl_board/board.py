@@ -457,6 +457,10 @@ class NFLBoard(BoardBase):
         if hasattr(layout, 'game_status'):
             self.matrix.draw_text_layout(layout.game_status, live_status)
 
+        # VS
+        if hasattr(layout, "VS"):
+            self.matrix.draw_text_layout(layout.VS, "VS")
+        
         # Render to the display
         self.matrix.render()
 
@@ -478,9 +482,9 @@ class NFLBoard(BoardBase):
         self._render_team_display(layout, game, show_scores=True)
 
         # Render final status
-        if hasattr(layout, 'game_status'):
-            self.matrix.draw_text_layout(layout.game_status, "FINAL")
-
+        if hasattr(layout, 'scheduled_date'):
+            self.matrix.draw_text_layout(layout.scheduled_date, "FINAL")
+        
         # Render to the display
         self.matrix.render()
 
@@ -543,10 +547,8 @@ class NFLBoard(BoardBase):
 
         # Render scores or records
         if show_scores:
-            if hasattr(layout, 'away_team_score'):
-                self.matrix.draw_text_layout(layout.away_team_score, str(game.away_score))
-            if hasattr(layout, 'home_team_score'):
-                self.matrix.draw_text_layout(layout.home_team_score, str(game.home_score))
+            if hasattr(layout, 'score'):
+                self.matrix.draw_text_layout(layout.score, str(f"{game.away_score}-{game.home_score}"))
         else:
             if hasattr(layout, 'away_team_score'):
                 self.matrix.draw_text_layout(layout.away_team_score, game.away_team.record_text)
