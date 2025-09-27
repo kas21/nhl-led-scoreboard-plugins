@@ -8,17 +8,8 @@
             "position": ["48%", 1],
             "align": "left-top"
         },
-        "team_name": {
-            "position": [1, 1],
-            "align": "left-top",
-            "font": "small"
-        },
         "record_header": {
-            "position": [0, 9],
-            "relative": {
-                "to": "team_name",
-                "align": "left"
-            }, 
+            "position": [1, 1],
             "align": "left-top",
             "font": "small"
         },
@@ -49,7 +40,7 @@
             "align": "left-top",
             "font": "small"
         },
-        "next_game": {
+        "next_game_line_1": {
             "position": [0, 7],
             "relative": {
                 "to": "next_game_header",
@@ -58,10 +49,19 @@
             "align": "left-top",
             "font": "small"
         },
+        "next_game_line_2": {
+            "position": [0, 7],
+            "relative": {
+                "to": "next_game_line_1",
+                "align": "left"
+            }, 
+            "align": "left-top",
+            "font": "small"
+        },
          "last_game_header": {
             "position": [0, 8],
             "relative": {
-                "to": "next_game",
+                "to": "next_game_line_2",
                 "align": "left"
             }, 
             "align": "left-top",

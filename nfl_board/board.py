@@ -95,8 +95,10 @@ class NFLBoardConfig:
 class NFLBoard(BoardBase):
     """
     NFL Board implementation following BoardBase pattern.
-    Displays NFL games with clean separation between data fetching and rendering.
     """
+
+    # Class attribute: NFL Board requires early initialization for data fetching
+    requires_early_initialization = True
 
     def __init__(self, data, matrix, sleepEvent):
         super().__init__(data, matrix, sleepEvent)
@@ -150,7 +152,6 @@ class NFLBoard(BoardBase):
                 )
 
         debug.info("NFL Board: Initialization complete")
-
 
     def render(self):
         """
@@ -613,9 +614,21 @@ class NFLBoard(BoardBase):
         next_game = self._get_next_game_for_team(team.team_id, team_schedule)
         if hasattr(layout, 'next_game_header'):
             self.matrix.draw_text_layout(layout.next_game_header, "NEXT GAME:", fillColor=team.color_primary, backgroundColor=team.color_secondary)
-        if hasattr(layout, 'next_game'):
-            next_game_text = self._format_next_game_display(next_game, team.team_id)
-            self.matrix.draw_text_layout(layout.next_game, next_game_text)
+
+        # Split next game info into two lines
+        next_game_text = self._format_next_game_display(next_game, team.team_id)
+        parts = next_game_text.split(" ", 2)
+        if len(parts) >= 3:
+            line1 = " ".join(parts[:2])  # "FRI 10/4"
+            line2 = parts[2]             # "1:00 PM VS BUF"
+        else:
+            line1 = next_game_text
+            line2 = ""
+
+        if hasattr(layout, 'next_game_line_1'):
+            self.matrix.draw_text_layout(layout.next_game_line_1, line1)
+        if hasattr(layout, 'next_game_line_2'):
+            self.matrix.draw_text_layout(layout.next_game_line_2, line2)
 
         # Render last game information
         last_game = self._get_last_game_for_team(team.team_id, team_schedule)
@@ -970,6 +983,8 @@ class NFLBoard(BoardBase):
 
     def cleanup(self):
         """Clean up resources when board is unloaded."""
+        # this method is likely never used in current app architecture
+        # base_board should require this method if architecture ever changes load/unload boards
         debug.info("NFL Board: Cleaning up resources")
 
         # Clear caches and display state
