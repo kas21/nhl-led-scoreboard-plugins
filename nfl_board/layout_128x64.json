@@ -125,8 +125,8 @@
             "font": "medium"
         },
         "score": {
-            "position": ["50%", "45%"],
-            "align": "center-top",
+            "position": ["50%", "100%"],
+            "align": "center-bottom",
             "font": "medium"
         },
         "scheduled_date": {

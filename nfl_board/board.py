@@ -455,12 +455,11 @@ class NFLBoard(BoardBase):
 
         # Render live game status
         live_status = self._format_live_game_status(game)
-        if hasattr(layout, 'game_status'):
-            self.matrix.draw_text_layout(layout.game_status, live_status)
-
-        # VS
-        if hasattr(layout, "VS"):
-            self.matrix.draw_text_layout(layout.VS, "VS")
+        quarter, time = live_status.split(" ", 1) if " " in live_status else (live_status, "")
+        if hasattr(layout, 'scheduled_date'):
+            self.matrix.draw_text_layout(layout.scheduled_date, quarter)
+        if hasattr(layout, "scheduled_time") and time:
+            self.matrix.draw_text_layout(layout.scheduled_time, time)
         
         # Render to the display
         self.matrix.render()
@@ -817,10 +816,17 @@ class NFLBoard(BoardBase):
 
     def _format_live_game_status(self, game: NFLGame) -> str:
         """Format status text for live games."""
+        # check if quarter is 1-4 and set as 1ST, 2ND, 3RD, 4TH
+        if game.quarter in ["1", "2", "3", "4"]:
+            quarter_suffix = {"1": "ST", "2": "ND", "3": "RD", "4": "TH"}.get(game.quarter, "TH")
+            quarter_text = f"{game.quarter}{quarter_suffix}"
+        else:
+            quarter_text = f"Q{game.quarter}" if game.quarter else "LIVE"
+            
         if game.quarter and game.time_remaining:
-            return f"Q{game.quarter} {game.time_remaining}"
+            return f"{quarter_text} {game.time_remaining}"
         elif game.quarter:
-            return f"Q{game.quarter}"
+            return f"{quarter_text}"
         else:
             return "LIVE"
 
