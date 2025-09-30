@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional
 import threading
 
-import debug
+import logging
 from PIL import Image
 import json
 from utils import get_file
@@ -169,17 +169,17 @@ class NFLBoard(BoardBase):
                         break
 
                 if team_game:
-                    debug.log(f"Showing game for favorite team {team_id}")
+                    debug.debug(f"Showing game for favorite team {team_id}")
                     self._render_game(team_game)
             else:
                 # Team has no game today - show team summary if we have team data
                 if team_id in favorite_teams:
                     team = favorite_teams[team_id]
-                    debug.log(f"Showing team summary for favorite team {team_id} (no game today)")
+                    debug.debug(f"Showing team summary for favorite team {team_id} (no game today)")
 
                     # Use schedule data for this team if available, otherwise fall back to all available games
                     team_schedule = team_schedule_games.get(team_id, all_available_games)
-                    debug.log(f"Using {len(team_schedule)} schedule games for team {team_id} summary")
+                    debug.debug(f"Using {len(team_schedule)} schedule games for team {team_id} summary")
 
                     self._render_team_summary(team, team_schedule)
                 else:
@@ -189,7 +189,7 @@ class NFLBoard(BoardBase):
         """
         Render games that don't involve favorite teams.
         """
-        debug.log(f"Showing {len(other_games)} other games")
+        debug.debug(f"Showing {len(other_games)} other games")
         # Sort games by date to show them in chronological order
         sorted_other_games = sorted(other_games, key=lambda x: x.date or datetime.datetime.min.replace(tzinfo=datetime.timezone.utc))
 
@@ -334,7 +334,7 @@ class NFLBoard(BoardBase):
 
         # Step 1: Get current games from scoreboard
         current_games = self.api_client.get_scoreboard()
-        debug.log(f"Fetched {len(current_games)} games from current scoreboard")
+        debug.debug(f"Fetched {len(current_games)} games from current scoreboard")
 
         # Step 2: Get favorite team data
         favorite_teams = {}
@@ -355,7 +355,7 @@ class NFLBoard(BoardBase):
                 if team:
                     favorite_teams[team_id] = team
                     team_schedule_games[team_id] = schedule
-                    debug.log(f"Loaded {len(schedule)} schedule games for team {team_id}")
+                    debug.debug(f"Loaded {len(schedule)} schedule games for team {team_id}")
 
             except Exception as exc:
                 debug.error(f"Failed to fetch data for team {team_id}: {exc}")
@@ -369,11 +369,11 @@ class NFLBoard(BoardBase):
                 # Fetch additional previous games if needed
                 previous_games = self._get_previous_games_if_needed()
                 display_games.extend(previous_games)
-                debug.log(f"Added {len(previous_games)} previous games")
+                debug.debug(f"Added {len(previous_games)} previous games")
             else:
                 # Filter out old completed games
                 display_games = self._filter_games_by_time_cutoff(display_games, self.show_previous_games_until)
-                debug.log(f"Filtered games based on time cutoff")
+                debug.debug(f"Filtered games based on time cutoff")
 
         # Step 4: Apply business logic filtering (after time filtering)
 

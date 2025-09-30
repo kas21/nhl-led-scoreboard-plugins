@@ -5,7 +5,7 @@ from boards.base_board import BoardBase
 from . import __version__, __description__, __board_name__
 import datetime
 
-
+debug = logging.getLogger("scoreboard")
 class ExampleBoard(BoardBase):
     """
     Example board module that displays the current time and a custom message.

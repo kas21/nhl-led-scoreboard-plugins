@@ -6,7 +6,7 @@ from . import __version__, __description__, __board_name__
 import datetime
 from data.data import Data
 from renderer.matrix import Matrix
-import debug
+import logging
 
 import csv
 import json
@@ -19,6 +19,7 @@ from holidays import country_holidays
 from holidays.constants import PUBLIC, GOVERNMENT, UNOFFICIAL
 from PIL import Image
 
+debug = logging.getLogger("scoreboard")
 
 # ---- Data classes ------------------------------------------------------------
 

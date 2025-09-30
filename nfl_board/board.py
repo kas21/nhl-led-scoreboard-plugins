@@ -3,7 +3,7 @@ NFL Board - Clean Implementation
 Displays NFL games and team information using clear, readable logic.
 """
 
-import debug
+import logging
 import json
 from datetime import datetime, time, timedelta, timezone
 from typing import List, Optional, Dict
@@ -17,7 +17,7 @@ from boards.base_board import BoardBase
 from . import __board_name__, __description__, __version__
 from .data import NFLApiClient, NFLDataSnapshot, NFLGame, NFLTeam
 
-
+debug = logging.getLogger("scoreboard")
 class NFLBoardConfig:
     """
     Handles NFL board configuration with validation and sensible defaults.
@@ -158,18 +158,18 @@ class NFLBoard(BoardBase):
         Main render method called by the board system.
         Handles data refresh timing and delegates to appropriate render methods.
         """
-        debug.log("NFL Board: render() method called")
+        debug.debug("NFL Board: render() method called")
 
         try:
             # Update display games from current snapshot data
-            debug.log("NFL Board: Refreshing display games")
+            debug.debug("NFL Board: Refreshing display games")
             self._refresh_display_games()
 
-            debug.log(f"NFL Board: Have {len(self.current_display_items)} total items to display")
+            debug.debug(f"NFL Board: Have {len(self.current_display_items)} total items to display")
 
             # Check if we have anything to display
             if not self.current_display_items:
-                debug.log("NFL Board: No content available, rendering message")
+                debug.debug("NFL Board: No content available, rendering message")
                 self._render_no_content_available()
                 return
 
@@ -177,7 +177,7 @@ class NFLBoard(BoardBase):
             for item in self.current_display_items:
                 # Check for sleep event interruption before each item
                 if self.sleepEvent.is_set():
-                    debug.log("NFL Board: Sleep event set, interrupting display loop")
+                    debug.debug("NFL Board: Sleep event set, interrupting display loop")
                     break
 
                 # Render based on item type
@@ -300,7 +300,7 @@ class NFLBoard(BoardBase):
             # This gives us full records, standings info, etc.
             all_team_ids = list(all_teams.keys())
             detailed_count = self.api_client.populate_team_details(all_team_ids)
-            debug.log(f"NFL Board: Loaded detailed data for {detailed_count} total teams")
+            debug.debug(f"NFL Board: Loaded detailed data for {detailed_count} total teams")
 
             # Get favorite teams subset (now with detailed records)
             snapshot.favorite_teams = {
@@ -390,8 +390,8 @@ class NFLBoard(BoardBase):
 
         self.current_display_items = display_items
 
-        debug.log(f"NFL Board: Updated unified display - {len(display_items)} total items ")
-        debug.log(f"NFL Board: {len(favorite_team_games)} favorite games, {len(other_games)} other games, {len(teams_for_summaries)} team summaries")
+        debug.debug(f"NFL Board: Updated unified display - {len(display_items)} total items ")
+        debug.debug(f"NFL Board: {len(favorite_team_games)} favorite games, {len(other_games)} other games, {len(teams_for_summaries)} team summaries")
 
     def _get_games_for_display(self, snapshot: 'NFLDataSnapshot') -> List['NFLGame']:
         """
@@ -441,7 +441,7 @@ class NFLBoard(BoardBase):
 
     def _render_live_game(self, game: NFLGame):
         """Render a live game display."""
-        debug.log(f"NFL Board: Rendering live game {game.away_team.abbreviation} @ {game.home_team.abbreviation}")
+        debug.debug(f"NFL Board: Rendering live game {game.away_team.abbreviation} @ {game.home_team.abbreviation}")
 
         self.matrix.clear()
         layout = self.get_board_layout('nfl_game')
@@ -469,7 +469,7 @@ class NFLBoard(BoardBase):
 
     def _render_completed_game(self, game: NFLGame):
         """Render a completed game display."""
-        debug.log(f"NFL Board: Rendering completed game {game.away_team.abbreviation} @ {game.home_team.abbreviation}")
+        debug.debug(f"NFL Board: Rendering completed game {game.away_team.abbreviation} @ {game.home_team.abbreviation}")
 
         self.matrix.clear()
         layout = self.get_board_layout('nfl_game')
@@ -493,7 +493,7 @@ class NFLBoard(BoardBase):
 
     def _render_upcoming_game(self, game: NFLGame):
         """Render an upcoming game display."""
-        debug.log(f"NFL Board: Rendering upcoming game {game.away_team.abbreviation} @ {game.home_team.abbreviation}")
+        debug.debug(f"NFL Board: Rendering upcoming game {game.away_team.abbreviation} @ {game.home_team.abbreviation}")
 
         self.matrix.clear()
         layout = self.get_board_layout('nfl_game')
@@ -557,9 +557,9 @@ class NFLBoard(BoardBase):
 
     def _render_team_summary(self, team: NFLTeam):
         """Render team summary display showing team info, record, next/last games."""
-        debug.log(f"NFL Board: Rendering team summary for {team.display_name}")
-        debug.log(f"NFL Board: Team record: {team.record_text} (detailed: {team.has_detailed_record})")
-        debug.log(f"NFL Board: Team colors: {team.color_primary}, {team.color_secondary}")
+        debug.debug(f"NFL Board: Rendering team summary for {team.display_name}")
+        debug.debug(f"NFL Board: Team record: {team.record_text} (detailed: {team.has_detailed_record})")
+        debug.debug(f"NFL Board: Team colors: {team.color_primary}, {team.color_secondary}")
 
         if not team.has_detailed_record:
             debug.warning(f"NFL Board: Team {team.display_name} using basic data - detailed record not loaded")
@@ -572,7 +572,7 @@ class NFLBoard(BoardBase):
             self._render_fallback_team_summary(team)
             return
 
-        debug.log("NFL Board: Using team summary layout")
+        debug.debug("NFL Board: Using team summary layout")
 
         # Get team's schedule data for next/last game info
         snapshot = getattr(self.data, "nfl_board_snapshot", None)
@@ -598,15 +598,15 @@ class NFLBoard(BoardBase):
 
         # Render record
         if hasattr(layout, 'record_header'):
-            debug.log("NFL Board: Rendering record header")
+            debug.debug("NFL Board: Rendering record header")
             self.matrix.draw_text_layout(layout.record_header, "RECORD:", fillColor=team.color_primary, backgroundColor=team.color_secondary)
         if hasattr(layout, 'record'):
             # Use record_text property which has safe fallbacks
             #record_display = team.record_summary if team.record_summary else team.record_text
-            debug.log(f"NFL Board: Rendering record: {team.record_text}")
+            debug.debug(f"NFL Board: Rendering record: {team.record_text}")
             self._draw_text(layout, "record", team.record_text)
         if hasattr(layout, 'record_comment') and team.record_comment:
-            debug.log(f"NFL Board: Rendering record comment: {team.record_comment}")
+            debug.debug(f"NFL Board: Rendering record comment: {team.record_comment}")
             self._draw_text(layout, "record_comment", team.record_comment)
 
         # Render next game information
@@ -645,7 +645,7 @@ class NFLBoard(BoardBase):
 
     def _render_no_content_available(self):
         """Render display when no games or team summaries are available."""
-        debug.log("NFL Board: Rendering no content available message")
+        debug.debug("NFL Board: Rendering no content available message")
 
         self.matrix.clear()
         layout = self.get_board_layout('nfl_game')
@@ -665,7 +665,7 @@ class NFLBoard(BoardBase):
 
     def _render_error_display(self, error_message: str):
         """Render error message display."""
-        debug.log(f"NFL Board: Rendering error display: {error_message}")
+        debug.debug(f"NFL Board: Rendering error display: {error_message}")
 
         self.matrix.clear()
         layout = self.get_board_layout('nfl')
@@ -716,10 +716,10 @@ class NFLBoard(BoardBase):
             if logo_path and logo_path.exists():
                 logo_image = Image.open(logo_path)
                 self.logo_cache[cache_key] = logo_image
-                debug.log(f"NFL Board: Loaded logo for {team.abbreviation} from {logo_path}")
+                debug.debug(f"NFL Board: Loaded logo for {team.abbreviation} from {logo_path}")
                 return logo_image
 
-            debug.log(f"NFL Board: No logo available for {team.abbreviation} (URL: {team.logo_url})")
+            debug.debug(f"NFL Board: No logo available for {team.abbreviation} (URL: {team.logo_url})")
 
         except Exception as error:
             debug.error(f"NFL Board: Failed to load logo for {team.abbreviation}: {error}")
@@ -943,30 +943,30 @@ class NFLBoard(BoardBase):
 
     def _render_fallback_team_summary(self, team: NFLTeam):
         """Render team summary when no layout is available."""
-        debug.log(f"NFL Board: Rendering fallback team summary for {team.display_name}")
+        debug.debug(f"NFL Board: Rendering fallback team summary for {team.display_name}")
 
         font = self.data.config.layout.font
-        debug.log(f"NFL Board: Using font: {font}")
+        debug.debug(f"NFL Board: Using font: {font}")
 
         # Simple text display
-        debug.log("NFL Board: Drawing team name")
+        debug.debug("NFL Board: Drawing team name")
         self.matrix.draw_text_centered(10, team.display_name, font)
 
-        debug.log(f"NFL Board: Drawing record: {team.record_text}")
+        debug.debug(f"NFL Board: Drawing record: {team.record_text}")
         self.matrix.draw_text_centered(25, f"Record: {team.record_text}", font)
 
-        debug.log("NFL Board: Drawing summary label")
+        debug.debug("NFL Board: Drawing summary label")
         self.matrix.draw_text_centered(40, "Team Summary", font)
 
-        debug.log("NFL Board: Calling matrix.render()")
+        debug.debug("NFL Board: Calling matrix.render()")
         # Render to the display
         self.matrix.render()
 
-        debug.log(f"NFL Board: Waiting {self.config.display_seconds} seconds")
+        debug.debug(f"NFL Board: Waiting {self.config.display_seconds} seconds")
         # Display the rendered content for configured duration
         self.sleepEvent.wait(self.config.display_seconds)
 
-        debug.log("NFL Board: Fallback team summary complete")
+        debug.debug("NFL Board: Fallback team summary complete")
 
     def _draw_text(self, layout, element_name: str, text: str) -> None:
         """

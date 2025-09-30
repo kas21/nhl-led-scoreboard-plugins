@@ -3,7 +3,7 @@ NFL Board Data Management - Clean Implementation
 Handles API calls and data processing using APScheduler for background refresh.
 """
 
-import debug
+import logging
 import requests
 from datetime import datetime, timedelta
 from dataclasses import dataclass
@@ -12,6 +12,7 @@ from pathlib import Path
 from PIL import Image
 import io
 
+debug = logging.getLogger("scoreboard")
 
 def parse_espn_datetime(value: Optional[str]) -> Optional[datetime]:
     """Parse ESPN datetime strings which typically end with Z."""
@@ -152,7 +153,7 @@ class NFLApiClient:
         date_string = date.strftime("%Y%m%d")
         url = f"{self.base_url}/scoreboard?dates={date_string}"
 
-        debug.log(f"NFL Board: Fetching scoreboard for {date_string}")
+        debug.debug(f"NFL Board: Fetching scoreboard for {date_string}")
 
         try:
             response = requests.get(url, timeout=10)
@@ -167,7 +168,7 @@ class NFLApiClient:
                 if game:
                     games.append(game)
 
-            debug.log(f"NFL Board: Found {len(games)} games for {date_string}")
+            debug.debug(f"NFL Board: Found {len(games)} games for {date_string}")
             return games
 
         except Exception as exc:
@@ -226,7 +227,7 @@ class NFLApiClient:
         """
         try:
             url = f"{self.base_url}/teams/{team_id}/schedule"
-            debug.log(f"NFL Board: Fetching schedule for team {team_id}")
+            debug.debug(f"NFL Board: Fetching schedule for team {team_id}")
 
             response = requests.get(url, timeout=10)
             response.raise_for_status()
@@ -240,7 +241,7 @@ class NFLApiClient:
                 if game:
                     games.append(game)
 
-            debug.log(f"NFL Board: Found {len(games)} scheduled games for team {team_id}")
+            debug.debug(f"NFL Board: Found {len(games)} scheduled games for team {team_id}")
             return games
 
         except Exception as exc:
@@ -476,7 +477,7 @@ class NFLApiClient:
         """
         try:
             url = f"{self.base_url}/teams/{team_id}"
-            debug.log(f"NFL Board: Fetching detailed data for team {team_id}")
+            debug.debug(f"NFL Board: Fetching detailed data for team {team_id}")
 
             response = requests.get(url, timeout=10)
             response.raise_for_status()
@@ -486,7 +487,7 @@ class NFLApiClient:
             if detailed_team and team_id in self.teams_cache:
                 # Update the cached team with detailed information
                 self.teams_cache[team_id] = detailed_team
-                debug.log(f"NFL Board: Updated team {team_id} with detailed record data")
+                debug.debug(f"NFL Board: Updated team {team_id} with detailed record data")
                 return True
             else:
                 debug.warning(f"NFL Board: Failed to get detailed data for team {team_id}")
@@ -545,7 +546,7 @@ class NFLApiClient:
             return cache_path
 
         try:
-            debug.log(f"NFL Board: Downloading logo for {team.abbreviation} from {team.logo_url}")
+            debug.debug(f"NFL Board: Downloading logo for {team.abbreviation} from {team.logo_url}")
 
             # Download the logo
             response = requests.get(team.logo_url, timeout=10)
@@ -583,7 +584,7 @@ class NFLApiClient:
             # Save as PNG
             square_image.save(cache_path, 'PNG')
 
-            debug.log(f"NFL Board: Cached logo for {team.abbreviation} at {cache_path}")
+            debug.debug(f"NFL Board: Cached logo for {team.abbreviation} at {cache_path}")
             return cache_path
 
         except Exception as exc:
@@ -633,7 +634,7 @@ class NFLApiClient:
             if logo_path:
                 success_count += 1
 
-        debug.log(f"NFL Board: Preloaded {success_count}/{len(teams)} team logos")
+        debug.debug(f"NFL Board: Preloaded {success_count}/{len(teams)} team logos")
         return success_count
 
 
