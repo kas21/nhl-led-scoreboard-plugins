@@ -11,7 +11,7 @@
         "record_header": {
             "position": [1, 1],
             "align": "left-top",
-            "font": "small"
+            "font": "wx_small"
         },
         "record": {
             "position": [0, 7],
@@ -20,7 +20,7 @@
                 "align": "left"
             }, 
             "align": "left-top",
-            "font": "small"
+            "font": "wx_small"
         },
         "record_comment": {
             "position": [0, 6],
@@ -29,7 +29,7 @@
                 "align": "left"
             }, 
             "align": "left-top",
-            "font": "small"
+            "font": "wx_small"
         },
         "next_game_header": {
             "position": [0, 8],
@@ -38,7 +38,7 @@
                 "align": "left"
             }, 
             "align": "left-top",
-            "font": "small"
+            "font": "wx_small"
         },
         "next_game_line_1": {
             "position": [0, 7],
@@ -47,7 +47,7 @@
                 "align": "left"
             }, 
             "align": "left-top",
-            "font": "small"
+            "font": "wx_small"
         },
         "next_game_line_2": {
             "position": [0, 7],
@@ -56,7 +56,7 @@
                 "align": "left"
             }, 
             "align": "left-top",
-            "font": "small"
+            "font": "wx_small"
         },
          "last_game_header": {
             "position": [0, 8],
@@ -65,7 +65,7 @@
                 "align": "left"
             }, 
             "align": "left-top",
-            "font": "small"
+            "font": "wx_small"
         },
         "last_game_result": {
             "position": [0, 7],
@@ -74,7 +74,16 @@
                 "align": "left"
             }, 
             "align": "left-top",
-            "font": "small"
+            "font": "wx_small"
+        },
+        "last_game_text": {
+            "position": [2, 0],
+            "relative": {
+                "to": "last_game_result",
+                "align": "right"
+            }, 
+            "align": "left-top",
+            "font": "wx_small"
         }
     },
     "nfl_game": {
@@ -105,12 +114,12 @@
         "time_remaining": {
             "position":["50%", 0],
             "align": "center",
-            "font": "small"
+            "font": "wx_small"
         },
         "start_time": {
             "position":["50%", 0],
             "align": "center",
-            "font": "small"
+            "font": "wx_small"
         },
         "quarter": {
             "position":[0, 1],

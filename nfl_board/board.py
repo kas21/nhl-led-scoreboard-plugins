@@ -586,6 +586,9 @@ class NFLBoard(BoardBase):
             if team_logo:
                 #self.matrix.draw_image_layout(layout.team_logo, team_logo)
                 self._draw_logo(layout, 'team_logo', team_logo, team.abbreviation)
+        
+        # Render gradient - after logos but before other visuals
+        self.matrix.draw_image([self.matrix.width/3,0], self.gradient, align="center")
 
         # Render team name with team colors
         if hasattr(layout, 'team_name'):
@@ -607,7 +610,7 @@ class NFLBoard(BoardBase):
             self._draw_text(layout, "record", team.record_text)
         if hasattr(layout, 'record_comment') and team.record_comment:
             debug.debug(f"NFL Board: Rendering record comment: {team.record_comment}")
-            self._draw_text(layout, "record_comment", team.record_comment)
+            self._draw_text(layout, "record_comment", team.record_comment.upper())
 
         # Render next game information
         next_game = self._get_next_game_for_team(team.team_id, team_schedule)
@@ -618,10 +621,10 @@ class NFLBoard(BoardBase):
         next_game_text = self._format_next_game_display(next_game, team.team_id)
         parts = next_game_text.split(" ", 2)
         if len(parts) >= 3:
-            line1 = " ".join(parts[:2])  # "FRI 10/4"
-            line2 = parts[2]             # "1:00 PM VS BUF"
+            line1 = " ".join(parts[:2]).upper()  # "FRI 10/4"
+            line2 = parts[2].upper()             # "1:00 PM VS BUF"
         else:
-            line1 = next_game_text
+            line1 = next_game_text.upper()
             line2 = ""
 
         if hasattr(layout, 'next_game_line_1'):
@@ -631,11 +634,21 @@ class NFLBoard(BoardBase):
 
         # Render last game information
         last_game = self._get_last_game_for_team(team.team_id, team_schedule)
+        last_game_results = self._format_last_game_display(last_game, team.team_id)
         if hasattr(layout, 'last_game_header'):
             self.matrix.draw_text_layout(layout.last_game_header, "LAST GAME:", fillColor=team.color_primary, backgroundColor=team.color_secondary)
         if hasattr(layout, 'last_game_result'):
-            last_game_text = self._format_last_game_display(last_game, team.team_id)
-            self.matrix.draw_text_layout(layout.last_game_result, last_game_text)
+            result = last_game_results.get("result", "")
+            if result == "W":
+                fillColor = (50, 255, 50)  # Green for win
+            elif result == "L":
+                fillColor = (255, 50, 50)  # Red for loss
+            else:
+                fillColor = (200, 200, 50)  # Yellow for tie
+            self.matrix.draw_text_layout(layout.last_game_result, result.upper(),fillColor=fillColor)
+        if hasattr(layout, 'last_game_text'):
+            last_game_text = f"{last_game_results.get("score", "")} {last_game_results.get("opponent", "")}".strip()
+            self.matrix.draw_text_layout(layout.last_game_text, last_game_text.upper())
 
         # Render to the display
         self.matrix.render()
@@ -925,11 +938,11 @@ class NFLBoard(BoardBase):
         if game.home_team.team_id == team_id:
             team_score = game.home_score
             opponent_score = game.away_score
-            opponent_text = f"vs {opponent.abbreviation}"
+            opponent_text = f"VS {opponent.abbreviation}"
         else:
             team_score = game.away_score
             opponent_score = game.home_score
-            opponent_text = f"@ {opponent.abbreviation}"
+            opponent_text = f"AT {opponent.abbreviation}"
 
         # Format result
         if team_score > opponent_score:
@@ -939,7 +952,12 @@ class NFLBoard(BoardBase):
         else:
             result = "T"
 
-        return f"{result} {team_score}-{opponent_score} {opponent_text}".upper()
+        # return dictionary with components for layout
+        return {
+            "result": result,
+            "score": f"{team_score}-{opponent_score}",
+            "opponent": opponent_text
+        }
 
     def _render_fallback_team_summary(self, team: NFLTeam):
         """Render team summary when no layout is available."""
