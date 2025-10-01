@@ -647,7 +647,7 @@ class NFLBoard(BoardBase):
                 fillColor = (200, 200, 50)  # Yellow for tie
             self.matrix.draw_text_layout(layout.last_game_result, result.upper(),fillColor=fillColor)
         if hasattr(layout, 'last_game_text'):
-            last_game_text = f"{last_game_results.get("score", "")} {last_game_results.get("opponent", "")}".strip()
+            last_game_text = f"{last_game_results.get('score', '')} {last_game_results.get('opponent', '')}".strip()
             self.matrix.draw_text_layout(layout.last_game_text, last_game_text.upper())
 
         # Render to the display
