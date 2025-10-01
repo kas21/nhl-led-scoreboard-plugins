@@ -6,7 +6,8 @@
         "Columbus Day",
         "Veterans Day",
         "Election Day",
-        "Martin Luther King Jr. Day"
+        "Martin Luther King Jr. Day",
+        "Birthday of Martin Luther King, Jr."
     ],
     "horizon_days": 60,
     "themes_path": "holiday_themes.json",
